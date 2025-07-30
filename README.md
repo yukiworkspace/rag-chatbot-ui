@@ -7,7 +7,7 @@
 - 🛡️ レート制限・CORS保護
 - 💬 インテリジェントなRAG検索
 - 📚 引用情報表示
-- 🎨 美しいStreamlit UI
+- 🎨 Streamlit UI
 
 ## アーキテクチャ
 - Frontend: Streamlit Cloud
