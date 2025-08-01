@@ -312,7 +312,7 @@ def login_user(email, password):
                 st.session_state.user_id = email
                 st.success("✅ ログインしました！")
                 st.balloons()
-                st.experimental_rerun()
+                st.rerun()
             else:
                 error_data = response.json()
                 error_msg = error_data.get('error', 'Unknown error')
@@ -367,6 +367,306 @@ def signup_user(email, password):
         except Exception as e:
             st.error("❌ 予期しないエラーが発生しました")
 
+def show_chat_interface():
+    """チャット画面（認証後のみ表示）"""
+    try:
+        # デバッグ用：関数の開始をログ出力
+        print("DEBUG: show_chat_interface() started")
+        
+        # 初回のセッション一覧読み込み
+        if not st.session_state.chat_sessions:
+            print("DEBUG: Loading chat sessions...")
+            st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+        
+        # 現在のセッションタイトルを取得
+        print("DEBUG: Getting current session title...")
+        current_title = get_current_session_title(st.session_state.current_session_id, st.session_state.chat_sessions)
+        print(f"DEBUG: Current title = {current_title}")
+        
+    except Exception as e:
+        st.error(f"🚨 show_chat_interface初期化エラー: {str(e)}")
+        print(f"ERROR in show_chat_interface initialization: {str(e)}")
+        return
+
+    # サイドバー：セッション管理（改善版）
+    try:
+        print("DEBUG: Starting sidebar creation...")
+        with st.sidebar:
+            st.title("🤖 RAG ChatBot")
+            st.write(f"👤 ユーザー: {st.session_state.user_id}")
+            
+            # セキュリティ情報表示
+            with st.expander("🔒 セキュリティ情報"):
+                st.write("✅ セッション暗号化済み")
+                st.write("✅ データ保護有効")
+                st.write("⏰ セッション有効期限: 24時間")
+            
+            st.divider()
+            
+            # 検索フィルター設定
+            st.subheader("🔍 検索フィルター")
+            with st.expander("詳細フィルター"):
+                document_type = st.selectbox(
+                    "文書タイプ",
+                    ["", "manual", "policy", "report", "specification"],
+                    key="doc_type_filter"
+                )
+                product = st.text_input("製品名", key="product_filter", max_chars=100)
+                model = st.text_input("モデル", key="model_filter", max_chars=100)
+                category = st.text_input("カテゴリ", key="category_filter", max_chars=100)
+                
+                # 入力値のサニタイゼーション
+                filters = {}
+                if document_type:
+                    filters["document-type"] = sanitize_input(document_type)
+                if product:
+                    filters["product"] = sanitize_input(product)
+                if model:
+                    filters["model"] = sanitize_input(model)
+                if category:
+                    filters["category"] = sanitize_input(category)
+                
+                st.session_state.filters = filters
+                
+                if filters:
+                    st.write("**適用中のフィルター:**")
+                    for k, v in filters.items():
+                        st.write(f"• {k}: {v}")
+            
+            st.divider()
+            
+            # チャット履歴（改善版）
+            st.subheader("📚 チャット履歴")
+            
+            # チャット管理ボタン
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("➕ 新規チャット", use_container_width=True):
+                    st.session_state.current_session_id = None
+                    st.session_state.messages = []
+                    st.rerun()
+            
+            with col2:
+                if st.button("🔄 履歴更新", use_container_width=True):
+                    with st.spinner("セッション一覧を更新中..."):
+                        st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+                    st.rerun()
+            
+            # 保存済セッション一覧（改善版）
+            if st.session_state.chat_sessions:
+                st.write("**保存済セッション:**")
+                for session in st.session_state.chat_sessions:
+                    with st.container():
+                        col1, col2 = st.columns([4, 1])
+                        with col1:
+                            # セッション情報のサニタイゼーション
+                            session_title = sanitize_input(session.get('title', '無題のチャット'))
+                            
+                            # 現在選択中のセッションにはマーカーを追加
+                            display_title = session_title
+                            if session['session_id'] == st.session_state.current_session_id:
+                                display_title = f"🔸 {session_title}"
+                            
+                            if st.button(
+                                display_title,
+                                key=f"load_{session['session_id']}",
+                                use_container_width=True
+                            ):
+                                st.session_state.current_session_id = session['session_id']
+                                # メッセージのサニタイゼーション
+                                sanitized_messages = []
+                                for msg in session.get('messages', []):
+                                    sanitized_msg = {
+                                        'role': sanitize_input(msg.get('role', '')),
+                                        'content': sanitize_input(msg.get('content', '')),
+                                        'timestamp': msg.get('timestamp', ''),
+                                        'citations': [sanitize_input(c) for c in msg.get('citations', [])],
+                                        'source_documents': msg.get('source_documents', [])
+                                    }
+                                    sanitized_messages.append(sanitized_msg)
+                                st.session_state.messages = sanitized_messages
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("🗑️", key=f"delete_{session['session_id']}"):
+                                if delete_chat_session(session['session_id'], st.session_state.auth_token):
+                                    st.success("セッションを削除しました")
+                                    st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+                                    # 削除したセッションが現在のセッションの場合、新規チャットに切り替え
+                                    if session['session_id'] == st.session_state.current_session_id:
+                                        st.session_state.current_session_id = None
+                                        st.session_state.messages = []
+                                    st.rerun()
+                                else:
+                                    st.error("削除に失敗しました")
+            
+            st.divider()
+            
+            # ログアウト
+            if st.button("🚪 ログアウト", use_container_width=True):
+                st.session_state.auth_token = None
+                st.session_state.user_id = None
+                st.session_state.current_session_id = None
+                st.session_state.messages = []
+                st.session_state.chat_sessions = []
+                st.session_state.authenticated = False
+                st.success("ログアウトしました")
+                st.rerun()
+        
+        print("DEBUG: Sidebar created successfully")
+        
+    except Exception as e:
+        st.error(f"🚨 サイドバー作成エラー: {str(e)}")
+        print(f"ERROR in sidebar creation: {str(e)}")
+        return
+
+    # メインチャット画面（認証後）
+    # 動的タイトル表示
+    st.title("🤖 RAG ChatBot")
+    st.caption("セキュアな知識ベース検索システム")
+    
+    # セッションタイトル表示（改善版）
+    if st.session_state.current_session_id:
+        st.header(f"💬 {current_title}")
+    else:
+        st.header("💬 新規チャット")
+    
+    # フィルター表示
+    if st.session_state.filters:
+        with st.expander("🔍 検索フィルターが適用されています", expanded=False):
+            for k, v in st.session_state.filters.items():
+                st.write(f"**{k}**: {v}")
+    
+    # チャット履歴表示（永続化対応）
+    for i, message in enumerate(st.session_state.messages):
+        with st.chat_message(message["role"]):
+            # メッセージ内容の表示（既にサニタイズ済み）
+            st.markdown(message["content"])
+            
+            # 引用情報の表示（永続化対応・st.link_button版）
+            if message["role"] == "assistant" and message.get("citations"):
+                # ユニークなキーを使用して状態を永続化
+                expander_key = f"citations_{i}_{st.session_state.current_session_id}"
+                
+                with st.expander("📚 参照文書", expanded=False, key=expander_key):
+                    source_docs = message.get("source_documents", [])
+                    for j, citation in enumerate(message["citations"], 1):
+                        col1, col2 = st.columns([4, 1])
+                        
+                        with col1:
+                            # 対応する文書の情報を取得
+                            doc_info = source_docs[j-1] if j-1 < len(source_docs) else {}
+                            source_uri = doc_info.get('source_uri', '')
+                            document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
+                            
+                            # st.link_buttonを使用（推奨）
+                            if source_uri:
+                                # まずファイルURLを取得
+                                file_url = get_file_access_url(source_uri, document_name)
+                                if file_url:
+                                    st.link_button(
+                                        f"📄 {document_name}",
+                                        file_url,
+                                        help="クリックしてファイルを新しいタブで開く"
+                                    )
+                                else:
+                                    st.write(f"📄 {document_name} (アクセス不可)")
+                            else:
+                                st.write(citation)
+                        
+                        with col2:
+                            # 関連度表示
+                            score = doc_info.get('score', 0) if j-1 < len(source_docs) else 0
+                            if score > 0:
+                                st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
+            
+            # タイムスタンプ
+            if message.get("timestamp"):
+                st.caption(f"🕒 {message['timestamp'][:19].replace('T', ' ')}")
+    
+    # ユーザー入力
+    if prompt := st.chat_input("質問を入力してください（最大5000文字）"):
+        # 入力値のサニタイゼーション
+        sanitized_prompt = sanitize_input(prompt)
+        
+        # 入力値検証
+        if not sanitized_prompt:
+            st.error("有効な質問を入力してください。")
+            st.stop()
+        
+        if len(sanitized_prompt) > 5000:
+            st.error("質問が長すぎます（最大5000文字）。")
+            st.stop()
+        
+        # ユーザーメッセージ表示
+        with st.chat_message("user"):
+            st.markdown(sanitized_prompt)
+        
+        # RAG APIコール
+        with st.chat_message("assistant"):
+            with st.spinner("🤖 AI回答を生成中..."):
+                response_data = call_rag_api(
+                    sanitized_prompt, 
+                    st.session_state.auth_token,
+                    st.session_state.current_session_id,
+                    st.session_state.filters
+                )
+                
+                if response_data.get("error"):
+                    st.error(f"❌ エラー: {response_data['error']}")
+                else:
+                    # 回答表示
+                    reply = response_data.get("reply", "回答を取得できませんでした")
+                    st.markdown(reply)
+                    
+                    # 新規セッションの場合、セッションIDを更新
+                    if response_data.get("is_new_session"):
+                        st.session_state.current_session_id = response_data["session_id"]
+                        session_title = response_data.get('title', '無題')
+                        st.success(f"✨ 新しいセッション「{session_title}」を開始しました")
+                    
+                    # 引用情報表示
+                    citations = response_data.get("citations", [])
+                    source_docs = response_data.get("source_documents", [])
+                    
+                    if citations:
+                        with st.expander("📚 参照文書"):
+                            for j, citation in enumerate(citations, 1):
+                                col1, col2 = st.columns([4, 1])
+                                
+                                with col1:
+                                    # 対応する文書の情報を取得
+                                    doc_info = source_docs[j-1] if j-1 < len(source_docs) else {}
+                                    source_uri = doc_info.get('source_uri', '')
+                                    document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
+                                    
+                                    # st.link_buttonを使用（推奨）
+                                    if source_uri:
+                                        # まずファイルURLを取得
+                                        file_url = get_file_access_url(source_uri, document_name)
+                                        if file_url:
+                                            st.link_button(
+                                                f"📄 {document_name}",
+                                                file_url,
+                                                help="クリックしてファイルを新しいタブで開く"
+                                            )
+                                        else:
+                                            st.write(f"📄 {document_name} (アクセス不可)")
+                                    else:
+                                        st.write(citation)
+                                
+                                with col2:
+                                    # 関連度表示
+                                    score = doc_info.get('score', 0) if j-1 < len(source_docs) else 0
+                                    if score > 0:
+                                        st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
+        
+        # セッション一覧を更新（新規セッション作成時）
+        if response_data.get("is_new_session"):
+            st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+        
+        st.rerun()
+
 def main():
     # セッション状態の初期化
     if 'auth_token' not in st.session_state:
@@ -410,127 +710,136 @@ def main():
         st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
     
     # サイドバー：セッション管理（改善版）
-    with st.sidebar:
-        st.title("🤖 RAG ChatBot")
-        st.write(f"👤 ユーザー: {st.session_state.user_id}")
-        
-        # セキュリティ情報表示
-        with st.expander("🔒 セキュリティ情報"):
-            st.write("✅ セッション暗号化済み")
-            st.write("✅ データ保護有効")
-            st.write("⏰ セッション有効期限: 24時間")
-        
-        st.divider()
-        
-        # 検索フィルター設定
-        st.subheader("🔍 検索フィルター")
-        with st.expander("詳細フィルター"):
-            document_type = st.selectbox(
-                "文書タイプ",
-                ["", "manual", "policy", "report", "specification"],
-                key="doc_type_filter"
-            )
-            product = st.text_input("製品名", key="product_filter", max_chars=100)
-            model = st.text_input("モデル", key="model_filter", max_chars=100)
-            category = st.text_input("カテゴリ", key="category_filter", max_chars=100)
+    try:
+        print("DEBUG: Starting sidebar creation...")
+        with st.sidebar:
+            st.title("🤖 RAG ChatBot")
+            st.write(f"👤 ユーザー: {st.session_state.user_id}")
             
-            # 入力値のサニタイゼーション
-            filters = {}
-            if document_type:
-                filters["document-type"] = sanitize_input(document_type)
-            if product:
-                filters["product"] = sanitize_input(product)
-            if model:
-                filters["model"] = sanitize_input(model)
-            if category:
-                filters["category"] = sanitize_input(category)
+            # セキュリティ情報表示
+            with st.expander("🔒 セキュリティ情報"):
+                st.write("✅ セッション暗号化済み")
+                st.write("✅ データ保護有効")
+                st.write("⏰ セッション有効期限: 24時間")
             
-            st.session_state.filters = filters
+            st.divider()
             
-            if filters:
-                st.write("**適用中のフィルター:**")
-                for k, v in filters.items():
-                    st.write(f"• {k}: {v}")
-        
-        st.divider()
-        
-        # チャット履歴（改善版）
-        st.subheader("📚 チャット履歴")
-        
-        # チャット管理ボタン
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("➕ 新規チャット", use_container_width=True):
+            # 検索フィルター設定
+            st.subheader("🔍 検索フィルター")
+            with st.expander("詳細フィルター"):
+                document_type = st.selectbox(
+                    "文書タイプ",
+                    ["", "manual", "policy", "report", "specification"],
+                    key="doc_type_filter"
+                )
+                product = st.text_input("製品名", key="product_filter", max_chars=100)
+                model = st.text_input("モデル", key="model_filter", max_chars=100)
+                category = st.text_input("カテゴリ", key="category_filter", max_chars=100)
+                
+                # 入力値のサニタイゼーション
+                filters = {}
+                if document_type:
+                    filters["document-type"] = sanitize_input(document_type)
+                if product:
+                    filters["product"] = sanitize_input(product)
+                if model:
+                    filters["model"] = sanitize_input(model)
+                if category:
+                    filters["category"] = sanitize_input(category)
+                
+                st.session_state.filters = filters
+                
+                if filters:
+                    st.write("**適用中のフィルター:**")
+                    for k, v in filters.items():
+                        st.write(f"• {k}: {v}")
+            
+            st.divider()
+            
+            # チャット履歴（改善版）
+            st.subheader("📚 チャット履歴")
+            
+            # チャット管理ボタン
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("➕ 新規チャット", use_container_width=True):
+                    st.session_state.current_session_id = None
+                    st.session_state.messages = []
+                    st.experimental_rerun()
+            
+            with col2:
+                if st.button("🔄 履歴更新", use_container_width=True):
+                    with st.spinner("セッション一覧を更新中..."):
+                        st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+                    st.experimental_rerun()
+            
+            # 保存済セッション一覧（改善版）
+            if st.session_state.chat_sessions:
+                st.write("**保存済セッション:**")
+                for session in st.session_state.chat_sessions:
+                    with st.container():
+                        col1, col2 = st.columns([4, 1])
+                        with col1:
+                            # セッション情報のサニタイゼーション
+                            session_title = sanitize_input(session.get('title', '無題のチャット'))
+                            
+                            # 現在選択中のセッションにはマーカーを追加
+                            display_title = session_title
+                            if session['session_id'] == st.session_state.current_session_id:
+                                display_title = f"🔸 {session_title}"
+                            
+                            if st.button(
+                                display_title,
+                                key=f"load_{session['session_id']}",
+                                use_container_width=True
+                            ):
+                                st.session_state.current_session_id = session['session_id']
+                                # メッセージのサニタイゼーション
+                                sanitized_messages = []
+                                for msg in session.get('messages', []):
+                                    sanitized_msg = {
+                                        'role': sanitize_input(msg.get('role', '')),
+                                        'content': sanitize_input(msg.get('content', '')),
+                                        'timestamp': msg.get('timestamp', ''),
+                                        'citations': [sanitize_input(c) for c in msg.get('citations', [])],
+                                        'source_documents': msg.get('source_documents', [])
+                                    }
+                                    sanitized_messages.append(sanitized_msg)
+                                st.session_state.messages = sanitized_messages
+                                st.experimental_rerun()
+                        
+                        with col2:
+                            if st.button("🗑️", key=f"delete_{session['session_id']}"):
+                                if delete_chat_session(session['session_id'], st.session_state.auth_token):
+                                    st.success("セッションを削除しました")
+                                    st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+                                    # 削除したセッションが現在のセッションの場合、新規チャットに切り替え
+                                    if session['session_id'] == st.session_state.current_session_id:
+                                        st.session_state.current_session_id = None
+                                        st.session_state.messages = []
+                                    st.experimental_rerun()
+                                else:
+                                    st.error("削除に失敗しました")
+            
+            st.divider()
+            
+            # ログアウト
+            if st.button("🚪 ログアウト", use_container_width=True):
+                st.session_state.auth_token = None
+                st.session_state.user_id = None
                 st.session_state.current_session_id = None
                 st.session_state.messages = []
+                st.session_state.chat_sessions = []
+                st.session_state.authenticated = False
+                st.success("ログアウトしました")
                 st.experimental_rerun()
         
-        with col2:
-            if st.button("🔄 履歴更新", use_container_width=True):
-                with st.spinner("セッション一覧を更新中..."):
-                    st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
-                st.experimental_rerun()
+        print("DEBUG: Sidebar created successfully")
         
-        # 保存済セッション一覧（改善版）
-        if st.session_state.chat_sessions:
-            st.write("**保存済セッション:**")
-            for session in st.session_state.chat_sessions:
-                with st.container():
-                    col1, col2 = st.columns([4, 1])
-                    with col1:
-                        # セッション情報のサニタイゼーション
-                        session_title = sanitize_input(session.get('title', '無題のチャット'))
-                        
-                        # 現在選択中のセッションにはマーカーを追加
-                        display_title = session_title
-                        if session['session_id'] == st.session_state.current_session_id:
-                            display_title = f"🔸 {session_title}"
-                        
-                        if st.button(
-                            display_title,
-                            key=f"load_{session['session_id']}",
-                            use_container_width=True
-                        ):
-                            st.session_state.current_session_id = session['session_id']
-                            # メッセージのサニタイゼーション
-                            sanitized_messages = []
-                            for msg in session.get('messages', []):
-                                sanitized_msg = {
-                                    'role': sanitize_input(msg.get('role', '')),
-                                    'content': sanitize_input(msg.get('content', '')),
-                                    'timestamp': msg.get('timestamp', ''),
-                                    'citations': [sanitize_input(c) for c in msg.get('citations', [])],
-                                    'source_documents': msg.get('source_documents', [])
-                                }
-                                sanitized_messages.append(sanitized_msg)
-                            st.session_state.messages = sanitized_messages
-                            st.experimental_rerun()
-                    
-                    with col2:
-                        if st.button("🗑️", key=f"delete_{session['session_id']}"):
-                            if delete_chat_session(session['session_id'], st.session_state.auth_token):
-                                st.success("セッションを削除しました")
-                                st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
-                                # 削除したセッションが現在のセッションの場合、新規チャットに切り替え
-                                if session['session_id'] == st.session_state.current_session_id:
-                                    st.session_state.current_session_id = None
-                                    st.session_state.messages = []
-                                st.experimental_rerun()
-                            else:
-                                st.error("削除に失敗しました")
-        
-        st.divider()
-        
-        # ログアウト
-        if st.button("🚪 ログアウト", use_container_width=True):
-            st.session_state.auth_token = None
-            st.session_state.user_id = None
-            st.session_state.current_session_id = None
-            st.session_state.messages = []
-            st.session_state.chat_sessions = []
-            st.session_state.authenticated = False
-            st.success("ログアウトしました")
-            st.experimental_rerun()
+    except Exception as e:
+        st.error(f"🚨 サイドバー作成エラー: {str(e)}")
+        print(f"ERROR in sidebar creation: {str(e)}")
+        return
     
     # メインチャット画面（認証後）
     # 動的タイトル表示
