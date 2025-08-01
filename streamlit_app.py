@@ -379,7 +379,7 @@ def main():
     # サイドバー：セッション管理（改善版）
     with st.sidebar:
         st.title("🤖 RAG ChatBot")
-        st.write(f"👤 ユーザー: {user_id}")
+        st.write(f"👤 ユーザー: {st.session_state.user_id}")
         
         # セキュリティ情報表示
         with st.expander("🔒 セキュリティ情報"):
