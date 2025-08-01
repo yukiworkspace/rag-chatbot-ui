@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import json
 import os
+import uuid
 from datetime import datetime
 
 # ページ設定
@@ -52,6 +53,16 @@ def main():
             st.code(f"認証API: ...{AUTH_API[-20:]}")
             st.code(f"RAG API: ...{RAG_API[-20:]}")
             st.code(f"チャットAPI: ...{CHAT_API[-20:]}")
+        
+        # セッション状態デバッグ
+        with st.sidebar.expander("セッション状態"):
+            st.json({
+                "authenticated": st.session_state.get('authenticated', False),
+                "user_id": st.session_state.get('user_id'),
+                "current_session_id": st.session_state.get('current_session_id'),
+                "messages_count": len(st.session_state.get('messages', [])),
+                "chat_sessions_count": len(st.session_state.get('chat_sessions', []))
+            })
     
     # セッション状態の初期化  
     if 'authenticated' not in st.session_state:
@@ -62,6 +73,12 @@ def main():
         st.session_state.user_id = None
     if 'messages' not in st.session_state:
         st.session_state.messages = []
+    if 'current_session_id' not in st.session_state:
+        st.session_state.current_session_id = None
+    if 'chat_sessions' not in st.session_state:
+        st.session_state.chat_sessions = []
+    if 'pending_login' not in st.session_state:
+        st.session_state.pending_login = False
     
     # 認証状態によって画面切り替え
     if st.session_state.authenticated:
@@ -171,29 +188,65 @@ def check_password_strength(password):
 
 def show_chat_interface():
     """チャット画面"""
+    # チャット履歴を読み込み（初回のみ）
+    if not st.session_state.chat_sessions:
+        load_chat_sessions()
+    
     # サイドバー
     with st.sidebar:
         st.write(f"👤 **ユーザー**: {st.session_state.user_id}")
         st.write(f"🔑 **認証状態**: ✅ 認証済み")
         
+        # 現在のセッション情報
+        if st.session_state.current_session_id:
+            st.write(f"💬 **現在のセッション**: {st.session_state.current_session_id[:8]}...")
+        else:
+            st.write("💬 **現在のセッション**: 新規")
+        
         if st.button("🚪 ログアウト", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.token = None
-            st.session_state.user_id = None
-            st.session_state.messages = []
-            st.success("ログアウトしました")
-            st.rerun()
+            logout_user()
         
         st.divider()
         
         # チャット管理
         st.subheader("💬 チャット管理")
-        if st.button("➕ 新しいチャット", use_container_width=True):
-            st.session_state.messages = []
-            st.success("新しいチャットを開始しました")
-            st.rerun()
         
-        st.write(f"📝 **メッセージ数**: {len(st.session_state.messages)}")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("➕ 新しいチャット", use_container_width=True):
+                start_new_chat()
+        
+        with col2:
+            if st.button("🔄 履歴更新", use_container_width=True):
+                load_chat_sessions()
+        
+        st.write(f"📝 **現在のメッセージ数**: {len(st.session_state.messages)}")
+        st.write(f"📚 **保存済セッション数**: {len(st.session_state.chat_sessions)}")
+        
+        # チャット履歴一覧
+        if st.session_state.chat_sessions:
+            st.subheader("📚 過去のチャット")
+            for i, session in enumerate(st.session_state.chat_sessions):
+                with st.container():
+                    col1, col2 = st.columns([4, 1])
+                    
+                    with col1:
+                        session_title = session.get('title', '無題のチャット')[:30]
+                        message_count = session.get('message_count', 0)
+                        session_info = f"{session_title}\n({message_count}メッセージ)"
+                        
+                        if st.button(
+                            session_info,
+                            key=f"load_session_{i}",
+                            use_container_width=True
+                        ):
+                            load_session(session['session_id'])
+                    
+                    with col2:
+                        if st.button("🗑️", key=f"delete_session_{i}"):
+                            delete_session(session['session_id'])
+        else:
+            st.info("📝 まだチャット履歴がありません")
         
         # セキュリティ情報
         with st.expander("🛡️ セキュリティステータス"):
@@ -202,12 +255,6 @@ def show_chat_interface():
             st.write("🌐 **CORS保護**: 有効")
             st.write("🛡️ **Gateway Response**: 設定済み")
             st.write("🔒 **HTTPS通信**: 有効")
-        
-        # APIステータス表示
-        with st.expander("📡 API ステータス"):
-            st.write("🟢 **認証API**: 正常")
-            st.write("🟢 **RAG API**: 正常") 
-            st.write("🟢 **チャットAPI**: 正常")
     
     # メインチャット画面
     st.header("💬 AIチャット")
@@ -238,10 +285,44 @@ def show_chat_interface():
             if message["role"] == "assistant":
                 if "timestamp" in message:
                     st.caption(f"🕒 {message['timestamp']}")
+                
+                # 引用情報表示（改善版）
                 if "citations" in message and message["citations"]:
                     with st.expander("📚 参照文書", expanded=False):
                         for i, citation in enumerate(message["citations"], 1):
                             st.write(f"{i}. {citation}")
+                
+                # 詳細文書情報表示（新機能）
+                if "source_documents" in message and message["source_documents"]:
+                    with st.expander("📄 詳細文書情報", expanded=False):
+                        for i, doc in enumerate(message["source_documents"], 1):
+                            st.subheader(f"文書 {i}")
+                            
+                            # 文書メタ情報
+                            doc_name = doc.get('document_name', 'N/A')
+                            doc_type = doc.get('document_type', 'N/A')
+                            product = doc.get('product', 'N/A')
+                            score = doc.get('score', 0)
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**文書名**: {doc_name}")
+                                st.write(f"**タイプ**: {doc_type}")
+                            with col2:
+                                st.write(f"**製品**: {product}")
+                                st.write(f"**関連度**: {score:.3f}")
+                            
+                            # 文書内容（抜粋）
+                            if 'content' in doc:
+                                with st.expander(f"📖 {doc_name} の内容", expanded=False):
+                                    st.text_area(
+                                        "文書内容",
+                                        doc['content'][:1000] + "..." if len(doc['content']) > 1000 else doc['content'],
+                                        height=200,
+                                        key=f"doc_content_{i}_{hash(doc_name)}"
+                                    )
+                            
+                            st.divider()
     
     # ユーザー入力
     if prompt := st.chat_input("💬 質問を入力してください..."):
@@ -269,6 +350,11 @@ def show_chat_interface():
                 if response and response.get("reply"):
                     st.markdown(response["reply"])
                     
+                    # セッションIDの更新（新規セッション作成時）
+                    if response.get("session_id") and not st.session_state.current_session_id:
+                        st.session_state.current_session_id = response["session_id"]
+                        st.success(f"✨ 新しいセッション「{response.get('title', '新規チャット')}」を開始しました")
+                    
                     # 引用情報表示
                     citations_displayed = False
                     if response.get("citations"):
@@ -277,17 +363,45 @@ def show_chat_interface():
                                 st.write(f"{i}. {citation}")
                         citations_displayed = True
                     
+                    # 詳細文書情報表示
+                    source_docs_displayed = False
+                    if response.get("source_documents"):
+                        with st.expander("📄 詳細文書情報", expanded=False):
+                            for i, doc in enumerate(response["source_documents"], 1):
+                                st.subheader(f"文書 {i}")
+                                
+                                doc_name = doc.get('document_name', 'N/A')
+                                doc_type = doc.get('document_type', 'N/A')
+                                product = doc.get('product', 'N/A')
+                                score = doc.get('score', 0)
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write(f"**文書名**: {doc_name}")
+                                    st.write(f"**タイプ**: {doc_type}")
+                                with col2:
+                                    st.write(f"**製品**: {product}")
+                                    st.write(f"**関連度**: {score:.3f}")
+                                
+                                st.divider()
+                        source_docs_displayed = True
+                    
                     # アシスタントメッセージ追加
                     assistant_message = {
                         "role": "assistant", 
                         "content": response["reply"],
                         "timestamp": datetime.now().strftime("%H:%M:%S"),
-                        "citations": response.get("citations", [])
+                        "citations": response.get("citations", []),
+                        "source_documents": response.get("source_documents", [])
                     }
                     st.session_state.messages.append(assistant_message)
                     
+                    # 新規セッションの場合はチャット履歴を更新
+                    if response.get("is_new_session"):
+                        load_chat_sessions()
+                    
                     # 成功メッセージ
-                    if citations_displayed:
+                    if citations_displayed or source_docs_displayed:
                         st.success("✅ 回答を生成しました（参照文書付き）")
                     else:
                         st.success("✅ 回答を生成しました")
@@ -302,7 +416,7 @@ def show_chat_interface():
                     })
 
 def login_user(email, password):
-    """ログイン処理（エラーハンドリング強化）"""
+    """ログイン処理（修正版）"""
     with st.spinner("🔐 認証中..."):
         try:
             response = requests.post(
@@ -316,15 +430,22 @@ def login_user(email, password):
                 st.session_state.authenticated = True
                 st.session_state.token = data["token"]
                 st.session_state.user_id = email
+                st.session_state.pending_login = True
+                
                 st.success("✅ ログインしました！")
                 st.balloons()
+                
+                # チャット履歴を読み込み
+                load_chat_sessions()
+                
+                # 強制的にページを更新
                 st.rerun()
             else:
                 error_data = response.json()
                 error_msg = error_data.get('error', 'Unknown error')
                 
                 # エラータイプ別の対応
-                if "Invalid credentials" in error_msg:
+                if "Invalid" in error_msg or "password" in error_msg.lower():
                     st.error("❌ メールアドレスまたはパスワードが間違っています")
                 elif "locked" in error_msg.lower():
                     st.error("🔒 アカウントがロックされています。しばらく待ってから再試行してください")
@@ -340,7 +461,7 @@ def login_user(email, password):
             st.error(f"詳細: {str(e)}")
 
 def signup_user(email, password):
-    """サインアップ処理（エラーハンドリング強化）"""
+    """サインアップ処理（修正版）"""
     with st.spinner("👤 アカウント作成中..."):
         try:
             response = requests.post(
@@ -351,8 +472,31 @@ def signup_user(email, password):
             
             if response.status_code == 201:
                 st.success("✅ アカウントを作成しました！")
-                st.info("📧 ログインタブからログインしてください")
-                st.balloons()
+                st.info("🔄 自動的にログインしています...")
+                
+                # 自動ログイン
+                auto_login_response = requests.post(
+                    f"{AUTH_API}/login",
+                    json={"user_id": email, "password": password},
+                    timeout=15
+                )
+                
+                if auto_login_response.status_code == 200:
+                    data = auto_login_response.json()
+                    st.session_state.authenticated = True
+                    st.session_state.token = data["token"]
+                    st.session_state.user_id = email
+                    
+                    st.success("✅ 自動ログインしました！チャット画面に移動します")
+                    st.balloons()
+                    
+                    # チャット履歴を読み込み
+                    load_chat_sessions()
+                    
+                    # 強制的にページを更新
+                    st.rerun()
+                else:
+                    st.success("✅ アカウント作成完了！ログインタブからログインしてください")
             else:
                 error_data = response.json()
                 error_msg = error_data.get('error', 'Unknown error')
@@ -375,12 +519,99 @@ def signup_user(email, password):
             st.error("❌ 予期しないエラーが発生しました")
             st.error(f"詳細: {str(e)}")
 
-def call_rag_api(query):
-    """RAG API呼び出し（エラーハンドリング強化）"""
+def logout_user():
+    """ログアウト処理"""
+    st.session_state.authenticated = False
+    st.session_state.token = None
+    st.session_state.user_id = None
+    st.session_state.messages = []
+    st.session_state.current_session_id = None
+    st.session_state.chat_sessions = []
+    st.session_state.pending_login = False
+    
+    st.success("✅ ログアウトしました")
+    st.rerun()
+
+def start_new_chat():
+    """新しいチャット開始"""
+    st.session_state.messages = []
+    st.session_state.current_session_id = None
+    st.success("✨ 新しいチャットを開始しました")
+    st.rerun()
+
+def load_chat_sessions():
+    """チャット履歴読み込み"""
+    if not st.session_state.token:
+        return
+    
     try:
+        response = requests.get(
+            f"{CHAT_API}/sessions",
+            headers={"Authorization": f"Bearer {st.session_state.token}"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            st.session_state.chat_sessions = data.get("sessions", [])
+        else:
+            st.warning("⚠️ チャット履歴の読み込みに失敗しました")
+            
+    except Exception as e:
+        st.warning(f"⚠️ チャット履歴読み込みエラー: {str(e)}")
+
+def load_session(session_id):
+    """セッション読み込み"""
+    # 現在のセッションIDを更新
+    st.session_state.current_session_id = session_id
+    
+    # セッションからメッセージを復元
+    for session in st.session_state.chat_sessions:
+        if session['session_id'] == session_id:
+            st.session_state.messages = session.get('messages', [])
+            break
+    
+    st.success(f"✅ セッション {session_id[:8]}... を読み込みました")
+    st.rerun()
+
+def delete_session(session_id):
+    """セッション削除"""
+    try:
+        response = requests.delete(
+            f"{CHAT_API}/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {st.session_state.token}"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            st.success("🗑️ セッションを削除しました")
+            
+            # 削除されたセッションが現在のセッションの場合、新規チャットに切り替え
+            if st.session_state.current_session_id == session_id:
+                start_new_chat()
+            else:
+                # チャット履歴を再読み込み
+                load_chat_sessions()
+                st.rerun()
+        else:
+            st.error("❌ セッションの削除に失敗しました")
+            
+    except Exception as e:
+        st.error(f"❌ 削除エラー: {str(e)}")
+
+def call_rag_api(query):
+    """RAG API呼び出し（修正版）"""
+    try:
+        # リクエストペイロード作成
+        payload = {"message": query}
+        
+        # 現在のセッションIDがある場合は含める
+        if st.session_state.current_session_id:
+            payload["session_id"] = st.session_state.current_session_id
+        
         response = requests.post(
             f"{RAG_API}/query",
-            json={"message": query},
+            json=payload,
             headers={"Authorization": f"Bearer {st.session_state.token}"},
             timeout=60  # RAG処理は時間がかかる可能性
         )
@@ -389,8 +620,7 @@ def call_rag_api(query):
             return response.json()
         elif response.status_code == 401:
             st.error("🔐 認証が切れました。再度ログインしてください")
-            st.session_state.authenticated = False
-            st.rerun()
+            logout_user()
         elif response.status_code == 429:
             st.error("⚡ レート制限に達しました。しばらく待ってから再試行してください")
         else:
