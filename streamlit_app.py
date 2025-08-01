@@ -515,77 +515,30 @@ def show_chat_interface():
                 if "timestamp" in message:
                     st.caption(f"🕒 {message['timestamp']}")
                 
-                # 引用情報表示（改善版）
+                # 引用情報表示（関連度表示付き）
                 if "citations" in message and message["citations"]:
                     with st.expander("📚 参照文書", expanded=False):
+                        source_docs = message.get("source_documents", [])
                         for i, citation in enumerate(message["citations"], 1):
-                            st.write(f"{i}. {citation}")
-                
-                # 詳細文書情報表示（入れ子を避けた設計）
-                if "source_documents" in message and message["source_documents"]:
-                    with st.expander("📄 詳細文書情報", expanded=False):
-                        for i, doc in enumerate(message["source_documents"], 1):
-                            st.subheader(f"文書 {i}")
+                            col1, col2 = st.columns([4, 1])
                             
-                            # 文書メタ情報
-                            doc_name = doc.get('document_name', 'N/A')
-                            doc_type = doc.get('document_type', 'N/A')
-                            product = doc.get('product', 'N/A')
-                            score = doc.get('score', 0)
-                            
-                            col1, col2 = st.columns(2)
                             with col1:
-                                st.write(f"**文書名**: {doc_name}")
-                                st.write(f"**タイプ**: {doc_type}")
-                            with col2:
-                                st.write(f"**製品**: {product}")
-                                st.write(f"**関連度**: {score:.3f}")
-                            
-                            # 文書内容（expanderの入れ子を避けてそのまま表示）
-                            if 'content' in doc and doc['content'].strip():
-                                st.write("**📖 文書内容:**")
-                                # 文書内容を制限付きで表示
-                                content = doc['content'][:2000]
-                                if len(doc['content']) > 2000:
-                                    content += "\n\n... (内容が長いため一部省略)"
+                                # 対応する文書の情報を取得
+                                doc_info = source_docs[i-1] if i-1 < len(source_docs) else {}
+                                source_uri = doc_info.get('source_uri', '')
+                                document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                                 
-                                st.text_area(
-                                    f"📄 {doc_name}",
-                                    content,
-                                    height=200,
-                                    key=f"doc_content_{i}_{hash(str(message.get('timestamp', '')))}",
-                                    help="文書の内容を表示しています。全文を確認したい場合は元の文書を参照してください。"
-                                )
-                            
-                            # S3ファイルアクセス機能（新規追加）
-                            if 'source_uri' in doc and doc['source_uri']:
-                                st.write("**📁 元ファイル:**")
-                                
-                                col_file1, col_file2 = st.columns([3, 1])
-                                with col_file1:
-                                    st.write(f"📄 **{doc_name}**")
-                                    st.caption(f"保存場所: {doc['source_uri']}")
-                                
-                                with col_file2:
+                                # クリック可能な文書名
+                                if source_uri:
                                     if st.button(
-                                        "📖 ファイルを開く", 
-                                        key=f"open_file_{i}_{hash(str(message.get('timestamp', '')))}",
-                                        help="S3に保存された元ファイルを新しいタブで開きます"
+                                        f"📄 {document_name}",
+                                        key=f"doc_click_{i}_{hash(str(message.get('timestamp', '')))}",
+                                        help="クリックしてファイルを開く"
                                     ):
-                                        with st.spinner("📁 ファイルアクセス準備中..."):
-                                            file_url = get_file_access_url(doc['source_uri'], doc_name)
+                                        with st.spinner("📁 ファイルを開いています..."):
+                                            file_url = get_file_access_url(source_uri, document_name)
                                             if file_url:
-                                                st.success("✅ ファイルアクセス用URLを生成しました")
-                                                st.markdown(f"""
-                                                **🔗 ファイルアクセス**
-                                                
-                                                下記リンクをクリックして文書を開いてください：
-                                                
-                                                [{doc_name} を開く]({file_url})
-                                                
-                                                ⚠️ **注意**: このリンクは1時間で期限切れになります
-                                                """)
-                                                
+                                                st.success("✅ ファイルを開きました")
                                                 # JavaScriptで新しいタブで開く
                                                 st.markdown(f"""
                                                 <script>
@@ -594,9 +547,14 @@ def show_chat_interface():
                                                 """, unsafe_allow_html=True)
                                             else:
                                                 st.error("❌ ファイルにアクセスできませんでした")
+                                else:
+                                    st.write(citation)
                             
-                            if i < len(message["source_documents"]):
-                                st.divider()
+                            with col2:
+                                # 関連度表示
+                                score = doc_info.get('score', 0) if i-1 < len(source_docs) else 0
+                                if score > 0:
+                                    st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
     
     # ユーザー入力
     # フィルター状況に応じたプレースホルダー
@@ -643,113 +601,27 @@ def show_chat_interface():
                     citations_displayed = False
                     if response.get("citations"):
                         with st.expander("📚 参照文書", expanded=False):
+                            source_docs = response.get("source_documents", [])
                             for i, citation in enumerate(response["citations"], 1):
-                                st.write(f"{i}. {citation}")
-                        citations_displayed = True
-                    
-                    # 詳細文書情報表示
-                    source_docs_displayed = False
-                    if response.get("source_documents"):
-                        with st.expander("📄 詳細文書情報", expanded=False):
-                            # フィルター適用情報
-                            if st.session_state.filters_enabled and st.session_state.search_filters:
-                                st.info(f"🎯 以下の結果は絞り込み検索により取得されました")
-                                filter_summary = ", ".join([f"{k}={v}" for k, v in st.session_state.search_filters.items()])
-                                st.caption(f"適用フィルター: {filter_summary}")
-                                st.divider()
-                            
-                            for i, doc in enumerate(response["source_documents"], 1):
-                                st.subheader(f"文書 {i}")
+                                col1, col2 = st.columns([4, 1])
                                 
-                                doc_name = doc.get('document_name', 'N/A')
-                                doc_type = doc.get('document_type', 'N/A')
-                                product = doc.get('product', 'N/A')
-                                score = doc.get('score', 0)
-                                
-                                col1, col2 = st.columns(2)
                                 with col1:
-                                    st.write(f"**文書名**: {doc_name}")
-                                    st.write(f"**タイプ**: {doc_type}")
-                                with col2:
-                                    st.write(f"**製品**: {product}")
-                                    st.write(f"**関連度**: {score:.3f}")
-                                
-                                # フィルター条件との一致を表示
-                                if st.session_state.filters_enabled and st.session_state.search_filters:
-                                    matches = []
+                                    # 対応する文書の情報を取得
+                                    doc_info = source_docs[i-1] if i-1 < len(source_docs) else {}
+                                    source_uri = doc_info.get('source_uri', '')
+                                    document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                                     
-                                    # 製品フィルターの一致確認
-                                    if "product" in st.session_state.search_filters:
-                                        filter_product = st.session_state.search_filters["product"]
-                                        doc_product = doc.get('product', '')
-                                        product_name = "エレベーター" if filter_product == "elevator" else "エスカレーター" if filter_product == "escalator" else filter_product
-                                        
-                                        if filter_product.lower() in str(doc_product).lower():
-                                            matches.append(f"✅ 製品: {product_name} ({doc_product})")
-                                        else:
-                                            matches.append(f"❌ 製品: {product_name} (実際: {doc_product})")
-                                    
-                                    # 文書タイプフィルターの一致確認
-                                    if "document-type" in st.session_state.search_filters:
-                                        filter_doc_type = st.session_state.search_filters["document-type"]
-                                        doc_doc_type = doc.get('document_type', '')
-                                        
-                                        # 文書名の表示名を取得
-                                        doc_type_names = {
-                                            "kelg-maintenance-inspection": "取説(保守点検編)",
-                                            "kelg-operation-management": "取説(運用管理編)",
-                                            "yellow-book": "イエローブック"
-                                        }
-                                        doc_name = doc_type_names.get(filter_doc_type, filter_doc_type)
-                                        
-                                        if filter_doc_type.lower() in str(doc_doc_type).lower():
-                                            matches.append(f"✅ 文書: {doc_name} ({doc_doc_type})")
-                                        else:
-                                            matches.append(f"❌ 文書: {doc_name} (実際: {doc_doc_type})")
-                                    
-                                    # その他のフィルターの一致確認
-                                    for filter_key, filter_value in st.session_state.search_filters.items():
-                                        if filter_key not in ["product", "document-type"]:
-                                            doc_value = doc.get(filter_key.replace('-', '_'), '')
-                                            if filter_value.lower() in str(doc_value).lower():
-                                                matches.append(f"✅ {filter_key}: {filter_value} ({doc_value})")
-                                            else:
-                                                matches.append(f"❌ {filter_key}: {filter_value} (実際: {doc_value})")
-                                    
-                                    if matches:
-                                        st.write("**🎯 フィルター条件との一致:**")
-                                        for match in matches:
-                                            st.write(f"  {match}")
-                                
-                                # S3ファイルアクセス機能（新規チャット用）
-                                if 'source_uri' in doc and doc['source_uri']:
-                                    st.write("**📁 元ファイル:**")
-                                    
-                                    col_file1, col_file2 = st.columns([3, 1])
-                                    with col_file1:
-                                        st.write(f"📄 **{doc_name}**")
-                                        st.caption(f"保存場所: {doc['source_uri']}")
-                                    
-                                    with col_file2:
+                                    # クリック可能な文書名
+                                    if source_uri:
                                         if st.button(
-                                            "📖 ファイルを開く", 
-                                            key=f"open_new_file_{i}_{hash(str(response.get('session_id', '')))}",
-                                            help="S3に保存された元ファイルを新しいタブで開きます"
+                                            f"📄 {document_name}",
+                                            key=f"new_doc_click_{i}_{hash(str(response.get('session_id', '')))}",
+                                            help="クリックしてファイルを開く"
                                         ):
-                                            with st.spinner("📁 ファイルアクセス準備中..."):
-                                                file_url = get_file_access_url(doc['source_uri'], doc_name)
+                                            with st.spinner("📁 ファイルを開いています..."):
+                                                file_url = get_file_access_url(source_uri, document_name)
                                                 if file_url:
-                                                    st.success("✅ ファイルアクセス用URLを生成しました")
-                                                    st.markdown(f"""
-                                                    **🔗 ファイルアクセス**
-                                                    
-                                                    下記リンクをクリックして文書を開いてください：
-                                                    
-                                                    [{doc_name} を開く]({file_url})
-                                                    
-                                                    ⚠️ **注意**: このリンクは1時間で期限切れになります
-                                                    """)
-                                                    
+                                                    st.success("✅ ファイルを開きました")
                                                     # JavaScriptで新しいタブで開く
                                                     st.markdown(f"""
                                                     <script>
@@ -758,12 +630,19 @@ def show_chat_interface():
                                                     """, unsafe_allow_html=True)
                                                 else:
                                                     st.error("❌ ファイルにアクセスできませんでした")
+                                    else:
+                                        st.write(citation)
                                 
-                                if i < len(response["source_documents"]):
-                                    st.divider()
-                        source_docs_displayed = True
+                                with col2:
+                                    # 関連度表示
+                                    score = doc_info.get('score', 0) if i-1 < len(source_docs) else 0
+                                    if score > 0:
+                                        st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
+                        
+                        citations_displayed = True
                     
-                    # アシスタントメッセージ追加
+                    
+                    # アシスタントメッセージ追加（source_documentsも含める）
                     assistant_message = {
                         "role": "assistant", 
                         "content": response["reply"],
@@ -778,7 +657,7 @@ def show_chat_interface():
                         load_chat_sessions()
                     
                     # 成功メッセージ
-                    if citations_displayed or source_docs_displayed:
+                    if citations_displayed:
                         st.success("✅ 回答を生成しました（参照文書付き）")
                     else:
                         st.success("✅ 回答を生成しました")
