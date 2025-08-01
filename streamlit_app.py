@@ -22,7 +22,8 @@ def get_api_endpoints():
         auth_api = st.secrets["API_ENDPOINTS"]["AUTH_API_URL"]
         rag_api = st.secrets["API_ENDPOINTS"]["RAG_API_URL"] 
         chat_api = st.secrets["API_ENDPOINTS"]["CHAT_API_URL"]
-        return auth_api, rag_api, chat_api
+        file_api = st.secrets["API_ENDPOINTS"].get("FILE_ACCESS_API_URL", auth_api)  # デフォルトは認証APIと同じ
+        return auth_api, rag_api, chat_api, file_api
     except:
         pass
     
@@ -30,6 +31,7 @@ def get_api_endpoints():
     auth_api = os.getenv("AUTH_API_URL")
     rag_api = os.getenv("RAG_API_URL")
     chat_api = os.getenv("CHAT_API_URL")
+    file_api = os.getenv("FILE_ACCESS_API_URL", auth_api)  # デフォルトは認証APIと同じ
     
     # デフォルト値（開発環境用 - 本番では使用しない）
     if not auth_api or not rag_api or not chat_api:
@@ -37,10 +39,10 @@ def get_api_endpoints():
         st.info("💡 環境変数 AUTH_API_URL, RAG_API_URL, CHAT_API_URL を設定するか、Streamlit Secrets を確認してください。")
         st.stop()
     
-    return auth_api, rag_api, chat_api
+    return auth_api, rag_api, chat_api, file_api
 
 # API エンドポイント取得
-AUTH_API, RAG_API, CHAT_API = get_api_endpoints()
+AUTH_API, RAG_API, CHAT_API, FILE_ACCESS_API = get_api_endpoints()
 
 def main():
     st.title("🤖 RAG ChatBot")
@@ -53,6 +55,7 @@ def main():
             st.code(f"認証API: ...{AUTH_API[-20:]}")
             st.code(f"RAG API: ...{RAG_API[-20:]}")
             st.code(f"チャットAPI: ...{CHAT_API[-20:]}")
+            st.code(f"ファイルAPI: ...{FILE_ACCESS_API[-20:]}")
         
         # セッション状態デバッグ
         with st.sidebar.expander("セッション状態"):
@@ -554,6 +557,44 @@ def show_chat_interface():
                                     help="文書の内容を表示しています。全文を確認したい場合は元の文書を参照してください。"
                                 )
                             
+                            # S3ファイルアクセス機能（新規追加）
+                            if 'source_uri' in doc and doc['source_uri']:
+                                st.write("**📁 元ファイル:**")
+                                
+                                col_file1, col_file2 = st.columns([3, 1])
+                                with col_file1:
+                                    st.write(f"📄 **{doc_name}**")
+                                    st.caption(f"保存場所: {doc['source_uri']}")
+                                
+                                with col_file2:
+                                    if st.button(
+                                        "📖 ファイルを開く", 
+                                        key=f"open_file_{i}_{hash(str(message.get('timestamp', '')))}",
+                                        help="S3に保存された元ファイルを新しいタブで開きます"
+                                    ):
+                                        with st.spinner("📁 ファイルアクセス準備中..."):
+                                            file_url = get_file_access_url(doc['source_uri'], doc_name)
+                                            if file_url:
+                                                st.success("✅ ファイルアクセス用URLを生成しました")
+                                                st.markdown(f"""
+                                                **🔗 ファイルアクセス**
+                                                
+                                                下記リンクをクリックして文書を開いてください：
+                                                
+                                                [{doc_name} を開く]({file_url})
+                                                
+                                                ⚠️ **注意**: このリンクは1時間で期限切れになります
+                                                """)
+                                                
+                                                # JavaScriptで新しいタブで開く
+                                                st.markdown(f"""
+                                                <script>
+                                                window.open('{file_url}', '_blank');
+                                                </script>
+                                                """, unsafe_allow_html=True)
+                                            else:
+                                                st.error("❌ ファイルにアクセスできませんでした")
+                            
                             if i < len(message["source_documents"]):
                                 st.divider()
     
@@ -679,6 +720,44 @@ def show_chat_interface():
                                         st.write("**🎯 フィルター条件との一致:**")
                                         for match in matches:
                                             st.write(f"  {match}")
+                                
+                                # S3ファイルアクセス機能（新規チャット用）
+                                if 'source_uri' in doc and doc['source_uri']:
+                                    st.write("**📁 元ファイル:**")
+                                    
+                                    col_file1, col_file2 = st.columns([3, 1])
+                                    with col_file1:
+                                        st.write(f"📄 **{doc_name}**")
+                                        st.caption(f"保存場所: {doc['source_uri']}")
+                                    
+                                    with col_file2:
+                                        if st.button(
+                                            "📖 ファイルを開く", 
+                                            key=f"open_new_file_{i}_{hash(str(response.get('session_id', '')))}",
+                                            help="S3に保存された元ファイルを新しいタブで開きます"
+                                        ):
+                                            with st.spinner("📁 ファイルアクセス準備中..."):
+                                                file_url = get_file_access_url(doc['source_uri'], doc_name)
+                                                if file_url:
+                                                    st.success("✅ ファイルアクセス用URLを生成しました")
+                                                    st.markdown(f"""
+                                                    **🔗 ファイルアクセス**
+                                                    
+                                                    下記リンクをクリックして文書を開いてください：
+                                                    
+                                                    [{doc_name} を開く]({file_url})
+                                                    
+                                                    ⚠️ **注意**: このリンクは1時間で期限切れになります
+                                                    """)
+                                                    
+                                                    # JavaScriptで新しいタブで開く
+                                                    st.markdown(f"""
+                                                    <script>
+                                                    window.open('{file_url}', '_blank');
+                                                    </script>
+                                                    """, unsafe_allow_html=True)
+                                                else:
+                                                    st.error("❌ ファイルにアクセスできませんでした")
                                 
                                 if i < len(response["source_documents"]):
                                     st.divider()
@@ -966,6 +1045,42 @@ def call_rag_api(query):
         return None
     except requests.exceptions.ConnectionError:
         st.error("🌐 RAGサービスに接続できません")
+        return None
+    except Exception as e:
+        st.error(f"❌ 予期しないエラー: {str(e)}")
+        return None
+
+def get_file_access_url(source_uri, document_name):
+    """S3ファイルの署名付きURLを取得"""
+    try:
+        response = requests.post(
+            f"{FILE_ACCESS_API}/file-access",  # 新しいエンドポイント
+            json={
+                "source_uri": source_uri,
+                "document_name": document_name
+            },
+            headers={"Authorization": f"Bearer {st.session_state.token}"},
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("presigned_url")
+        elif response.status_code == 401:
+            st.error("🔐 認証が切れました。再度ログインしてください")
+            logout_user()
+        elif response.status_code == 404:
+            st.error("📄 ファイルが見つかりませんでした")
+        else:
+            st.error(f"🔧 ファイルアクセスエラー: HTTP {response.status_code}")
+            
+        return None
+        
+    except requests.exceptions.Timeout:
+        st.error("⏰ ファイルアクセス要求がタイムアウトしました")
+        return None
+    except requests.exceptions.ConnectionError:
+        st.error("🌐 ファイルアクセスサービスに接続できません")
         return None
     except Exception as e:
         st.error(f"❌ 予期しないエラー: {str(e)}")
