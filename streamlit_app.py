@@ -173,11 +173,16 @@ def get_file_access_url(source_uri, document_name):
     return "無題のチャット"
 
 def show_auth_interface():
-    """認証画面"""
+    """認証画面（未ログイン時のみ表示）"""
+    # メインコンテンツ（認証画面）
     st.title("🤖 RAG ChatBot")
     st.caption("セキュアな知識ベース検索システム")
     
     st.header("🔐 ログイン・サインアップ")
+    
+    # ウェルカムメッセージ
+    st.info("🎉 **RAG ChatBotへようこそ！**\n\n"
+           "AI搭載の知識検索システムです。ログインまたはサインアップしてご利用ください。")
     
     # セキュリティ情報表示
     with st.expander("🛡️ セキュリティ機能", expanded=False):
@@ -193,10 +198,25 @@ def show_auth_interface():
             st.write("• XSS/SQLi防御")
             st.write("• HTTPメソッド制限")
     
+    # サイドバーを最小限に
+    with st.sidebar:
+        st.title("🔐 認証")
+        
+        # システム情報のみ表示
+        with st.expander("ℹ️ システム情報"):
+            st.write("**RAG ChatBot v1.0**")
+            st.write("• セキュア認証システム")
+            st.write("• 知識ベース検索")
+            st.write("• チャット履歴管理")
+        
+        st.divider()
+        st.caption("🔒 **セキュリティ保護されたシステム**")
+        st.caption("認証されたユーザーのみアクセス可能")
+    
     tab1, tab2 = st.tabs(["ログイン", "サインアップ"])
     
     with tab1:
-        st.subheader("ログイン")
+        st.subheader("🔑 既存アカウントでログイン")
         with st.form("login_form"):
             email = st.text_input("メールアドレス", placeholder="user@example.com")
             password = st.text_input("パスワード", type="password")
@@ -209,7 +229,7 @@ def show_auth_interface():
                     st.error("すべての項目を入力してください")
     
     with tab2:
-        st.subheader("新規サインアップ")
+        st.subheader("👤 新規アカウント作成")
         with st.form("signup_form"):
             new_email = st.text_input("メールアドレス", placeholder="user@example.com", key="signup_email")
             new_password = st.text_input("パスワード", type="password", key="signup_password", 
@@ -377,11 +397,13 @@ def main():
             st.session_state.auth_token = None
             st.session_state.authenticated = False
     
-    # 認証状態によって画面切り替え
+    # 認証状態によって画面切り替え（独立表示）
     if st.session_state.authenticated:
         show_chat_interface()
     else:
         show_auth_interface()
+        # 認証画面では処理を終了（チャット画面を表示しない）
+        return
     
     # 初回のセッション一覧読み込み
     if not st.session_state.chat_sessions:
@@ -510,10 +532,7 @@ def main():
             st.success("ログアウトしました")
             st.experimental_rerun()
     
-    # メインチャット画面（改善版）
-    # 現在のセッションタイトルを取得
-    current_title = get_current_session_title(st.session_state.current_session_id, st.session_state.chat_sessions)
-    
+    # メインチャット画面（認証後）
     # 動的タイトル表示
     st.title("🤖 RAG ChatBot")
     st.caption("セキュアな知識ベース検索システム")
