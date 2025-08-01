@@ -129,6 +129,17 @@ def delete_chat_session(session_id, token):
     except:
         return False
 
+def get_current_session_title(current_session_id, chat_sessions):
+    """現在のセッションのタイトルを取得"""
+    if not current_session_id:
+        return "新規チャット"
+    
+    for session in chat_sessions:
+        if session.get('session_id') == current_session_id:
+            return session.get('title', '無題のチャット')
+    
+    return "無題のチャット"
+
 def get_file_access_url(source_uri, document_name):
     """ファイルアクセスURLを取得"""
     try:
