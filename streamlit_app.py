@@ -30,9 +30,9 @@ def get_api_endpoints():
     chat_api = os.getenv("CHAT_API_URL")
     file_access_api = os.getenv("FILE_ACCESS_API_URL")
     
-    if not auth_api or not rag_api or not chat_api:
+    if not auth_api or not rag_api or not chat_api or not file_access_api:
         st.error("🔒 API エンドポイントが設定されていません。管理者に連絡してください。")
-        st.info("💡 環境変数 AUTH_API_URL, RAG_API_URL, CHAT_API_URL を設定するか、Streamlit Secrets を確認してください。")
+        st.info("💡 環境変数 AUTH_API_URL, RAG_API_URL, CHAT_API_URL, FILE_ACCESS_API_URL を設定するか、Streamlit Secrets を確認してください。")
         st.stop()
     
     return auth_api, rag_api, chat_api, file_access_api
@@ -160,6 +160,181 @@ def get_file_access_url(source_uri, document_name):
             return session.get('title', '無題のチャット')
     
     return "無題のチャット"
+
+def show_auth_interface():
+    """認証画面"""
+    st.title("🤖 RAG ChatBot")
+    st.caption("セキュアな知識ベース検索システム")
+    
+    st.header("🔐 ログイン・サインアップ")
+    
+    # セキュリティ情報表示
+    with st.expander("🛡️ セキュリティ機能", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("✅ **通信セキュリティ**")
+            st.write("• HTTPS暗号化通信")
+            st.write("• JWT認証トークン")
+            st.write("• CORS保護")
+        with col2:
+            st.write("✅ **攻撃対策**")
+            st.write("• レート制限")
+            st.write("• XSS/SQLi防御")
+            st.write("• HTTPメソッド制限")
+    
+    tab1, tab2 = st.tabs(["ログイン", "サインアップ"])
+    
+    with tab1:
+        st.subheader("ログイン")
+        with st.form("login_form"):
+            email = st.text_input("メールアドレス", placeholder="user@example.com")
+            password = st.text_input("パスワード", type="password")
+            login_btn = st.form_submit_button("🔑 ログイン", use_container_width=True)
+            
+            if login_btn:
+                if email and password:
+                    login_user(email, password)
+                else:
+                    st.error("すべての項目を入力してください")
+    
+    with tab2:
+        st.subheader("新規サインアップ")
+        with st.form("signup_form"):
+            new_email = st.text_input("メールアドレス", placeholder="user@example.com", key="signup_email")
+            new_password = st.text_input("パスワード", type="password", key="signup_password", 
+                                       help="8文字以上、大文字・小文字・数字・記号を含む")  
+            confirm_password = st.text_input("パスワード確認", type="password", key="confirm_password")
+            
+            # パスワード強度チェック
+            if new_password:
+                strength = check_password_strength(new_password)
+                if strength["score"] < 3:
+                    st.warning(f"⚠️ パスワード強度: {strength['label']} - {strength['suggestions']}")
+                else:
+                    st.success(f"✅ パスワード強度: {strength['label']}")
+            
+            signup_btn = st.form_submit_button("👤 サインアップ", use_container_width=True)
+            
+            if signup_btn:
+                if new_email and new_password and confirm_password:
+                    if new_password == confirm_password:
+                        if check_password_strength(new_password)["score"] >= 3:
+                            signup_user(new_email, new_password)
+                        else:
+                            st.error("パスワードが弱すぎます。より強力なパスワードを設定してください。")
+                    else:
+                        st.error("パスワードが一致しません")
+                else:
+                    st.error("すべての項目を入力してください")
+
+def check_password_strength(password):
+    """パスワード強度チェック"""
+    score = 0
+    suggestions = []
+    
+    if len(password) >= 8:
+        score += 1
+    else:
+        suggestions.append("8文字以上")
+    
+    if any(c.isupper() for c in password):
+        score += 1
+    else:
+        suggestions.append("大文字")
+    
+    if any(c.islower() for c in password):
+        score += 1
+    else:
+        suggestions.append("小文字")
+    
+    if any(c.isdigit() for c in password):
+        score += 1  
+    else:
+        suggestions.append("数字")
+    
+    if any(c in '!@#$%^&*(),.?":{}|<>' for c in password):
+        score += 1
+    else:
+        suggestions.append("記号")
+    
+    labels = ["とても弱い", "弱い", "普通", "強い", "とても強い"]
+    return {
+        "score": score,
+        "label": labels[min(score, 4)],
+        "suggestions": "、".join(suggestions) + "を含める"
+    }
+
+def login_user(email, password):
+    """ログイン処理（エラーハンドリング強化）"""
+    with st.spinner("🔐 認証中..."):
+        try:
+            response = requests.post(
+                f"{AUTH_API}/login",
+                json={"user_id": email, "password": password},
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                st.session_state.authenticated = True
+                st.session_state.auth_token = data["token"]
+                st.session_state.user_id = email
+                st.success("✅ ログインしました！")
+                st.balloons()
+                st.experimental_rerun()
+            else:
+                error_data = response.json()
+                error_msg = error_data.get('error', 'Unknown error')
+                
+                # エラータイプ別の対応
+                if "Invalid" in error_msg or "password" in error_msg.lower():
+                    st.error("❌ メールアドレスまたはパスワードが間違っています")
+                elif "locked" in error_msg.lower():
+                    st.error("🔒 アカウントがロックされています。しばらく待ってから再試行してください")
+                else:
+                    st.error(f"❌ ログインエラー: {error_msg}")
+                    
+        except requests.exceptions.Timeout:
+            st.error("⏰ 接続がタイムアウトしました。ネットワーク接続を確認してください")
+        except requests.exceptions.ConnectionError:
+            st.error("🌐 サーバーに接続できません。しばらく後に再試行してください")
+        except Exception as e:
+            st.error("❌ 予期しないエラーが発生しました。管理者に連絡してください")
+
+def signup_user(email, password):
+    """サインアップ処理（エラーハンドリング強化）"""
+    with st.spinner("👤 アカウント作成中..."):
+        try:
+            response = requests.post(
+                f"{AUTH_API}/signup", 
+                json={"user_id": email, "password": password},
+                timeout=15
+            )
+            
+            if response.status_code == 201:
+                st.success("✅ アカウントを作成しました！")
+                st.info("📧 ログインタブからログインしてください")
+                st.balloons()
+            else:
+                error_data = response.json()
+                error_msg = error_data.get('error', 'Unknown error')
+                
+                # エラータイプ別の対応
+                if "already exists" in error_msg:
+                    st.error("📧 このメールアドレスは既に登録されています")
+                elif "email" in error_msg.lower():
+                    st.error("📧 有効なメールアドレスを入力してください")
+                elif "password" in error_msg.lower():
+                    st.error("🔒 パスワードの要件を満たしていません")
+                else:
+                    st.error(f"❌ サインアップエラー: {error_msg}")
+                    
+        except requests.exceptions.Timeout:
+            st.error("⏰ 接続がタイムアウトしました")
+        except requests.exceptions.ConnectionError:
+            st.error("🌐 サーバーに接続できません")
+        except Exception as e:
+            st.error("❌ 予期しないエラーが発生しました")
 
 def main():
     # セッション状態の初期化
@@ -320,6 +495,7 @@ def main():
             st.session_state.current_session_id = None
             st.session_state.messages = []
             st.session_state.chat_sessions = []
+            st.session_state.authenticated = False
             st.success("ログアウトしました")
             st.experimental_rerun()
     
