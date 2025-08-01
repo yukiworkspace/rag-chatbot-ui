@@ -162,12 +162,11 @@ def get_file_access_url(source_uri, document_name):
     return "無題のチャット"
 
 def main():
-    # URL パラメータからトークン取得
-    query_params = st.experimental_get_query_params()
-    token = query_params.get('token', [None])[0]
-    
     # セッション状態の初期化
     if 'auth_token' not in st.session_state:
+        # URL パラメータからトークン取得を試行
+        query_params = st.experimental_get_query_params()
+        token = query_params.get('token', [None])[0]
         st.session_state.auth_token = token
     if 'current_session_id' not in st.session_state:
         st.session_state.current_session_id = None
@@ -179,23 +178,24 @@ def main():
         st.session_state.filters = {}
     if 'user_id' not in st.session_state:
         st.session_state.user_id = None
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
     
     # 認証チェック
-    if not st.session_state.auth_token:
-        st.error("🔒 認証が必要です。ログイン画面からアクセスしてください。")
-        st.markdown("---")
-        st.markdown("### セキュリティ保護されたシステムです")
-        st.markdown("- 認証されたユーザーのみアクセス可能")
-        st.markdown("- すべての通信は暗号化されています")
-        st.markdown("- セッションは24時間で自動期限切れ")
-        st.stop()
+    if st.session_state.auth_token:
+        user_id = verify_jwt_token(st.session_state.auth_token)
+        if user_id:
+            st.session_state.user_id = user_id
+            st.session_state.authenticated = True
+        else:
+            st.session_state.auth_token = None
+            st.session_state.authenticated = False
     
-    user_id = verify_jwt_token(st.session_state.auth_token)
-    if not user_id:
-        st.session_state.auth_token = None
-        st.experimental_rerun()
-    
-    st.session_state.user_id = user_id
+    # 認証状態によって画面切り替え
+    if st.session_state.authenticated:
+        show_chat_interface()
+    else:
+        show_auth_interface()
     
     # 初回のセッション一覧読み込み
     if not st.session_state.chat_sessions:
