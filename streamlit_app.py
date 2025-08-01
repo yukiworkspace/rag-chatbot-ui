@@ -333,7 +333,7 @@ def login_user(email, password):
             st.error("❌ 予期しないエラーが発生しました。管理者に連絡してください")
 
 def signup_user(email, password):
-    """サインアップ処理（エラーハンドリング強化）"""
+    """サインアップ処理（エラーハンドリング強化 + 自動ログイン）"""
     with st.spinner("👤 アカウント作成中..."):
         try:
             response = requests.post(
@@ -344,8 +344,29 @@ def signup_user(email, password):
             
             if response.status_code == 201:
                 st.success("✅ アカウントを作成しました！")
-                st.info("📧 ログインタブからログインしてください")
                 st.balloons()
+                
+                # 自動ログイン処理
+                st.info("🔄 自動ログイン中...")
+                time.sleep(1)  # ユーザーフィードバック用の短い遅延
+                
+                # ログイン処理実行
+                login_response = requests.post(
+                    f"{AUTH_API}/login",
+                    json={"user_id": email, "password": password},
+                    timeout=15
+                )
+                
+                if login_response.status_code == 200:
+                    data = login_response.json()
+                    st.session_state.authenticated = True
+                    st.session_state.auth_token = data["token"]
+                    st.session_state.user_id = email
+                    st.success("🎉 サインアップ完了！チャット画面に移動します...")
+                    st.rerun()
+                else:
+                    st.info("📧 アカウント作成完了！ログインタブからログインしてください")
+                    
             else:
                 error_data = response.json()
                 error_msg = error_data.get('error', 'Unknown error')
@@ -404,21 +425,43 @@ def show_chat_interface():
         # 検索フィルター設定（ユニークキー使用）
         st.subheader("🔍 検索フィルター")
         with st.expander("詳細フィルター"):
-            document_type = st.selectbox(
-                "文書タイプ",
-                ["", "manual", "policy", "report", "specification"],
-                key="chat_doc_type_filter"  # ユニークキーに変更
+            # 製品名フィルター
+            product_options = {
+                "": "",
+                "エレベーター": "elevator",
+                "エスカレーター": "escalator"
+            }
+            product_ui = st.selectbox(
+                "製品名",
+                list(product_options.keys()),
+                key="chat_product_selectbox"
             )
-            product = st.text_input("製品名", key="chat_product_filter", max_chars=100)
-            model = st.text_input("モデル", key="chat_model_filter", max_chars=100)
-            category = st.text_input("カテゴリ", key="chat_category_filter", max_chars=100)
+            product_value = product_options[product_ui]
+            
+            # 文書名フィルター
+            document_options = {
+                "": "",
+                "取説(保守点検編)": "kelg-maintenance-inspection",
+                "取説(運用管理編)": "kelg-operation-management", 
+                "イエローブック": "yellow-book"
+            }
+            document_ui = st.selectbox(
+                "文書名",
+                list(document_options.keys()),
+                key="chat_document_selectbox"
+            )
+            document_value = document_options[document_ui]
+            
+            # その他のフィルター
+            model = st.text_input("モデル", key="chat_model_input", max_chars=100)
+            category = st.text_input("カテゴリ", key="chat_category_input", max_chars=100)
             
             # 入力値のサニタイゼーション
             filters = {}
-            if document_type:
-                filters["document-type"] = sanitize_input(document_type)
-            if product:
-                filters["product"] = sanitize_input(product)
+            if product_value:
+                filters["product"] = sanitize_input(product_value)
+            if document_value:
+                filters["document-type"] = sanitize_input(document_value)
             if model:
                 filters["model"] = sanitize_input(model)
             if category:
@@ -429,7 +472,13 @@ def show_chat_interface():
             if filters:
                 st.write("**適用中のフィルター:**")
                 for k, v in filters.items():
-                    st.write(f"• {k}: {v}")
+                    if k == "product":
+                        display_value = [k for k, val in product_options.items() if val == v][0] if v in product_options.values() else v
+                    elif k == "document-type":
+                        display_value = [k for k, val in document_options.items() if val == v][0] if v in document_options.values() else v
+                    else:
+                        display_value = v
+                    st.write(f"• {k}: {display_value}")
         
         st.divider()
         
@@ -453,7 +502,7 @@ def show_chat_interface():
         # 保存済セッション一覧（改善版）
         if st.session_state.chat_sessions:
             st.write("**保存済セッション:**")
-            for session in st.session_state.chat_sessions:
+            for i, session in enumerate(st.session_state.chat_sessions):
                 with st.container():
                     col1, col2 = st.columns([4, 1])
                     with col1:
@@ -467,7 +516,7 @@ def show_chat_interface():
                         
                         if st.button(
                             display_title,
-                            key=f"load_{session['session_id']}",
+                            key=f"session_load_{session['session_id'][:8]}{i}",  # ユニークキー生成
                             use_container_width=True
                         ):
                             st.session_state.current_session_id = session['session_id']
@@ -486,7 +535,7 @@ def show_chat_interface():
                             st.rerun()
                     
                     with col2:
-                        if st.button("🗑️", key=f"delete_{session['session_id']}"):
+                        if st.button("🗑️", key=f"session_delete_{session['session_id'][:8]}{i}"):
                             if delete_chat_session(session['session_id'], st.session_state.auth_token):
                                 st.success("セッションを削除しました")
                                 st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
@@ -574,8 +623,8 @@ def show_chat_interface():
             if message.get("timestamp"):
                 st.caption(f"🕒 {message['timestamp'][:19].replace('T', ' ')}")
     
-    # ユーザー入力
-    if prompt := st.chat_input("質問を入力してください（最大5000文字）"):
+    # ユーザー入力（ユニークキー追加）
+    if prompt := st.chat_input("質問を入力してください（最大5000文字）", key="main_chat_input"):
         # 入力値のサニタイゼーション
         sanitized_prompt = sanitize_input(prompt)
         
