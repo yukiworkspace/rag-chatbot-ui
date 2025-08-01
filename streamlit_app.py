@@ -515,7 +515,8 @@ def show_chat_interface():
                 if "timestamp" in message:
                     st.caption(f"🕒 {message['timestamp']}")
                 
-                # 引用情報表示（関連度表示付き）
+                # Streamlit 1.28以降で利用可能な st.link_button を使用した版
+                # 引用情報表示（st.link_button版）
                 if "citations" in message and message["citations"]:
                     with st.expander("📚 参照文書", expanded=False):
                         source_docs = message.get("source_documents", [])
@@ -528,25 +529,18 @@ def show_chat_interface():
                                 source_uri = doc_info.get('source_uri', '')
                                 document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                                 
-                                # クリック可能な文書名
+                                # st.link_buttonを使用（推奨）
                                 if source_uri:
-                                    if st.button(
-                                        f"📄 {document_name}",
-                                        key=f"doc_click_{i}_{hash(str(message.get('timestamp', '')))}",
-                                        help="クリックしてファイルを開く"
-                                    ):
-                                        with st.spinner("📁 ファイルを開いています..."):
-                                            file_url = get_file_access_url(source_uri, document_name)
-                                            if file_url:
-                                                st.success("✅ ファイルを開きました")
-                                                # JavaScriptで新しいタブで開く
-                                                st.markdown(f"""
-                                                <script>
-                                                window.open('{file_url}', '_blank');
-                                                </script>
-                                                """, unsafe_allow_html=True)
-                                            else:
-                                                st.error("❌ ファイルにアクセスできませんでした")
+                                    # まずファイルURLを取得
+                                    file_url = get_file_access_url(source_uri, document_name)
+                                    if file_url:
+                                        st.link_button(
+                                            f"📄 {document_name}",
+                                            file_url,
+                                            help="クリックしてファイルを新しいタブで開く"
+                                        )
+                                    else:
+                                        st.write(f"📄 {document_name} (アクセス不可)")
                                 else:
                                     st.write(citation)
                             
