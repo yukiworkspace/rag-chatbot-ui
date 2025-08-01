@@ -622,12 +622,28 @@ def show_chat_interface():
                                                 file_url = get_file_access_url(source_uri, document_name)
                                                 if file_url:
                                                     st.success("✅ ファイルを開きました")
-                                                    # JavaScriptで新しいタブで開く
+                                                    
+                                                    # 直接リンクを表示（JavaScriptの代替）
                                                     st.markdown(f"""
-                                                    <script>
-                                                    window.open('{file_url}', '_blank');
-                                                    </script>
+                                                    **📖 ファイルアクセス**
+                                                    
+                                                    下記のリンクをクリックしてファイルを開いてください：
+                                                    
+                                                    <a href="{file_url}" target="_blank" style="
+                                                        display: inline-block;
+                                                        padding: 0.5rem 1rem;
+                                                        background-color: #4CAF50;
+                                                        color: white;
+                                                        text-decoration: none;
+                                                        border-radius: 0.25rem;
+                                                        font-weight: bold;
+                                                    ">🔗 {document_name} を開く</a>
+                                                    
+                                                    ⚠️ **注意**: このリンクは1時間で期限切れになります
                                                     """, unsafe_allow_html=True)
+                                                    
+                                                    # 補助的な情報
+                                                    st.info("💡 リンクを右クリック → '新しいタブで開く' でファイルを表示できます")
                                                 else:
                                                     st.error("❌ ファイルにアクセスできませんでした")
                                     else:
