@@ -20,23 +20,25 @@ def get_api_endpoints():
         auth_api = st.secrets["API_ENDPOINTS"]["AUTH_API_URL"]
         rag_api = st.secrets["API_ENDPOINTS"]["RAG_API_URL"] 
         chat_api = st.secrets["API_ENDPOINTS"]["CHAT_API_URL"]
-        return auth_api, rag_api, chat_api
+        file_access_api = st.secrets["API_ENDPOINTS"]["FILE_ACCESS_API_URL"]
+        return auth_api, rag_api, chat_api, file_access_api
     except:
         pass
     
     auth_api = os.getenv("AUTH_API_URL")
     rag_api = os.getenv("RAG_API_URL")
     chat_api = os.getenv("CHAT_API_URL")
+    file_access_api = os.getenv("FILE_ACCESS_API_URL")
     
     if not auth_api or not rag_api or not chat_api:
         st.error("🔒 API エンドポイントが設定されていません。管理者に連絡してください。")
         st.info("💡 環境変数 AUTH_API_URL, RAG_API_URL, CHAT_API_URL を設定するか、Streamlit Secrets を確認してください。")
         st.stop()
     
-    return auth_api, rag_api, chat_api
+    return auth_api, rag_api, chat_api, file_access_api
 
 # API エンドポイント取得
-AUTH_API, RAG_API, CHAT_API = get_api_endpoints()
+AUTH_API, RAG_API, CHAT_API, FILE_ACCESS_API = get_api_endpoints()
 
 def sanitize_input(text):
     """入力値のサニタイゼーション"""
@@ -127,7 +129,28 @@ def delete_chat_session(session_id, token):
     except:
         return False
 
-def get_current_session_title(current_session_id, chat_sessions):
+def get_file_access_url(source_uri, document_name):
+    """ファイルアクセスURLを取得"""
+    try:
+        response = requests.post(
+            f"{FILE_ACCESS_API}/get-file-url",
+            headers={
+                'Authorization': f'Bearer {st.session_state.auth_token}',
+                'Content-Type': 'application/json',
+                'User-Agent': 'RAG-ChatBot/1.0'
+            },
+            json={
+                "source_uri": source_uri,
+                "document_name": document_name
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return response.json().get('file_url')
+        return None
+    except Exception:
+        return None
     """現在のセッションのタイトルを取得"""
     if not current_session_id:
         return "新規チャット"
@@ -225,16 +248,6 @@ def main():
         
         # チャット履歴（改善版）
         st.subheader("📚 チャット履歴")
-        
-        # 統計情報表示
-        total_messages = len(st.session_state.messages)
-        total_saved_sessions = len(st.session_state.chat_sessions)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("📝 メッセージ数", total_messages)
-        with col2:
-            st.metric("💾 保存済セッション数", total_saved_sessions)
         
         # チャット管理ボタン
         col1, col2 = st.columns(2)
@@ -336,35 +349,42 @@ def main():
             # メッセージ内容の表示（既にサニタイズ済み）
             st.markdown(message["content"])
             
-            # 引用情報の表示（永続化対応）
+            # 引用情報の表示（永続化対応・st.link_button版）
             if message["role"] == "assistant" and message.get("citations"):
                 # ユニークなキーを使用して状態を永続化
                 expander_key = f"citations_{i}_{st.session_state.current_session_id}"
                 
-                with st.expander("📚 参照文書", key=expander_key):
+                with st.expander("📚 参照文書", expanded=False, key=expander_key):
                     source_docs = message.get("source_documents", [])
-                    
-                    for j, citation in enumerate(message["citations"]):
+                    for j, citation in enumerate(message["citations"], 1):
                         col1, col2 = st.columns([4, 1])
                         
                         with col1:
-                            st.write(citation)
+                            # 対応する文書の情報を取得
+                            doc_info = source_docs[j-1] if j-1 < len(source_docs) else {}
+                            source_uri = doc_info.get('source_uri', '')
+                            document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                             
-                            # 対応する文書の詳細情報
-                            if j < len(source_docs):
-                                doc = source_docs[j]
-                                if doc.get('document_name'):
-                                    st.caption(f"文書名: {doc['document_name']}")
-                                if doc.get('document_type'):
-                                    st.caption(f"タイプ: {doc['document_type']}")
-                                if doc.get('product'):
-                                    st.caption(f"製品: {doc['product']}")
+                            # st.link_buttonを使用（推奨）
+                            if source_uri:
+                                # まずファイルURLを取得
+                                file_url = get_file_access_url(source_uri, document_name)
+                                if file_url:
+                                    st.link_button(
+                                        f"📄 {document_name}",
+                                        file_url,
+                                        help="クリックしてファイルを新しいタブで開く"
+                                    )
+                                else:
+                                    st.write(f"📄 {document_name} (アクセス不可)")
+                            else:
+                                st.write(citation)
                         
                         with col2:
-                            # 関連度スコア表示
-                            if j < len(source_docs) and 'score' in source_docs[j]:
-                                score = source_docs[j]['score']
-                                st.metric("関連度", f"{score:.3f}")
+                            # 関連度表示
+                            score = doc_info.get('score', 0) if j-1 < len(source_docs) else 0
+                            if score > 0:
+                                st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
             
             # タイムスタンプ
             if message.get("timestamp"):
@@ -415,17 +435,14 @@ def main():
                     citations = response_data.get("citations", [])
                     source_docs = response_data.get("source_documents", [])
                     
-                    # Streamlit 1.28以降で利用可能な st.link_button を使用した版
-                    # 引用情報表示（st.link_button版）
-                    if "citations" in message and message["citations"]:
-                        with st.expander("📚 参照文書", expanded=False):
-                            source_docs = message.get("source_documents", [])
-                            for i, citation in enumerate(message["citations"], 1):
+                    if citations:
+                        with st.expander("📚 参照文書"):
+                            for j, citation in enumerate(citations, 1):
                                 col1, col2 = st.columns([4, 1])
                                 
                                 with col1:
                                     # 対応する文書の情報を取得
-                                    doc_info = source_docs[i-1] if i-1 < len(source_docs) else {}
+                                    doc_info = source_docs[j-1] if j-1 < len(source_docs) else {}
                                     source_uri = doc_info.get('source_uri', '')
                                     document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                                     
@@ -446,7 +463,7 @@ def main():
                                 
                                 with col2:
                                     # 関連度表示
-                                    score = doc_info.get('score', 0) if i-1 < len(source_docs) else 0
+                                    score = doc_info.get('score', 0) if j-1 < len(source_docs) else 0
                                     if score > 0:
                                         st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
         
