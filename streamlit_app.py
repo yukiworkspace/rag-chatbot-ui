@@ -802,13 +802,13 @@ def main():
                 if st.button("➕ 新規チャット", use_container_width=True):
                     st.session_state.current_session_id = None
                     st.session_state.messages = []
-                    st.experimental_rerun()
+                    st.rerun()
             
             with col2:
                 if st.button("🔄 履歴更新", use_container_width=True):
                     with st.spinner("セッション一覧を更新中..."):
                         st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
-                    st.experimental_rerun()
+                    st.rerun()
             
             # 保存済セッション一覧（改善版）
             if st.session_state.chat_sessions:
@@ -843,7 +843,7 @@ def main():
                                     }
                                     sanitized_messages.append(sanitized_msg)
                                 st.session_state.messages = sanitized_messages
-                                st.experimental_rerun()
+                                st.rerun()
                         
                         with col2:
                             if st.button("🗑️", key=f"delete_{session['session_id']}"):
@@ -854,7 +854,7 @@ def main():
                                     if session['session_id'] == st.session_state.current_session_id:
                                         st.session_state.current_session_id = None
                                         st.session_state.messages = []
-                                    st.experimental_rerun()
+                                    st.rerun()
                                 else:
                                     st.error("削除に失敗しました")
             
@@ -869,7 +869,7 @@ def main():
                 st.session_state.chat_sessions = []
                 st.session_state.authenticated = False
                 st.success("ログアウトしました")
-                st.experimental_rerun()
+                st.rerun()
         
         print("DEBUG: Sidebar created successfully")
         
@@ -1023,7 +1023,7 @@ def main():
         if response_data.get("is_new_session"):
             st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
         
-        st.experimental_rerun()
+        st.rerun()
 
 def call_rag_api(query, token, session_id, filters):
     """RAG APIの呼び出し（セキュリティ対策付き）"""
