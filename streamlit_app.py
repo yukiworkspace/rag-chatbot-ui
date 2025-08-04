@@ -178,7 +178,7 @@ def get_file_access_url(source_uri, document_name):
     try:
         print(f"DEBUG: Requesting file URL for {document_name} from {FILE_ACCESS_API}")
         response = requests.post(
-            f"{FILE_ACCESS_API}/get-file-url",
+            f"{FILE_ACCESS_API}/file-access",
             headers={
                 'Authorization': f'Bearer {st.session_state.auth_token}',
                 'Content-Type': 'application/json',
