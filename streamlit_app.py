@@ -702,6 +702,39 @@ def show_chat_interface():
         if response_data.get("is_new_session"):
             st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
         
+        st.rerun() = st.columns([4, 1])
+                                
+                                with col1:
+                                    # 対応する文書の情報を取得
+                                    doc_info = source_docs[j-1] if j-1 < len(source_docs) else {}
+                                    source_uri = doc_info.get('source_uri', '')
+                                    document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
+                                    
+                                    # st.link_buttonを使用（推奨）
+                                    if source_uri:
+                                        # まずファイルURLを取得
+                                        file_url = get_file_access_url(source_uri, document_name)
+                                        if file_url:
+                                            st.link_button(
+                                                f"📄 {document_name}",
+                                                file_url,
+                                                help="クリックしてファイルを新しいタブで開く"
+                                            )
+                                        else:
+                                            st.write(f"📄 {document_name} (アクセス不可)")
+                                    else:
+                                        st.write(citation)
+                                
+                                with col2:
+                                    # 関連度表示
+                                    score = doc_info.get('score', 0) if j-1 < len(source_docs) else 0
+                                    if score > 0:
+                                        st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
+        
+        # セッション一覧を更新（新規セッション作成時）
+        if response_data.get("is_new_session"):
+            st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+        
         st.rerun()
 
 def main():
@@ -802,13 +835,13 @@ def main():
                 if st.button("➕ 新規チャット", use_container_width=True):
                     st.session_state.current_session_id = None
                     st.session_state.messages = []
-                    st.rerun()
+                    st.experimental_rerun()
             
             with col2:
                 if st.button("🔄 履歴更新", use_container_width=True):
                     with st.spinner("セッション一覧を更新中..."):
                         st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
-                    st.rerun()
+                    st.experimental_rerun()
             
             # 保存済セッション一覧（改善版）
             if st.session_state.chat_sessions:
@@ -843,7 +876,7 @@ def main():
                                     }
                                     sanitized_messages.append(sanitized_msg)
                                 st.session_state.messages = sanitized_messages
-                                st.rerun()
+                                st.experimental_rerun()
                         
                         with col2:
                             if st.button("🗑️", key=f"delete_{session['session_id']}"):
@@ -854,7 +887,7 @@ def main():
                                     if session['session_id'] == st.session_state.current_session_id:
                                         st.session_state.current_session_id = None
                                         st.session_state.messages = []
-                                    st.rerun()
+                                    st.experimental_rerun()
                                 else:
                                     st.error("削除に失敗しました")
             
@@ -869,7 +902,7 @@ def main():
                 st.session_state.chat_sessions = []
                 st.session_state.authenticated = False
                 st.success("ログアウトしました")
-                st.rerun()
+                st.experimental_rerun()
         
         print("DEBUG: Sidebar created successfully")
         
@@ -1023,7 +1056,7 @@ def main():
         if response_data.get("is_new_session"):
             st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
         
-        st.rerun()
+        st.experimental_rerun()
 
 def call_rag_api(query, token, session_id, filters):
     """RAG APIの呼び出し（セキュリティ対策付き）"""
