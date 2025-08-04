@@ -21,7 +21,11 @@ def get_api_endpoints():
         auth_api = st.secrets["API_ENDPOINTS"]["AUTH_API_URL"]
         rag_api = st.secrets["API_ENDPOINTS"]["RAG_API_URL"] 
         chat_api = st.secrets["API_ENDPOINTS"]["CHAT_API_URL"]
-        file_access_api = st.secrets["API_ENDPOINTS"]["FILE_ACCESS_API_URL"]
+        # FILE_ACCESS_API_URL は必須ではないため、エラーを無視
+        try:
+            file_access_api = st.secrets["API_ENDPOINTS"]["FILE_ACCESS_API_URL"]
+        except:
+            file_access_api = None
         return auth_api, rag_api, chat_api, file_access_api
     except:
         pass
@@ -29,11 +33,11 @@ def get_api_endpoints():
     auth_api = os.getenv("AUTH_API_URL")
     rag_api = os.getenv("RAG_API_URL")
     chat_api = os.getenv("CHAT_API_URL")
-    file_access_api = os.getenv("FILE_ACCESS_API_URL")
+    file_access_api = os.getenv("FILE_ACCESS_API_URL")  # None でも許可
     
-    if not auth_api or not rag_api or not chat_api or not file_access_api:
+    if not auth_api or not rag_api or not chat_api:
         st.error("🔒 API エンドポイントが設定されていません。管理者に連絡してください。")
-        st.info("💡 環境変数 AUTH_API_URL, RAG_API_URL, CHAT_API_URL, FILE_ACCESS_API_URL を設定するか、Streamlit Secrets を確認してください。")
+        st.info("💡 環境変数 AUTH_API_URL, RAG_API_URL, CHAT_API_URL を設定するか、Streamlit Secrets を確認してください。")
         st.stop()
     
     return auth_api, rag_api, chat_api, file_access_api
@@ -107,12 +111,17 @@ def load_chat_sessions(token):
             timeout=15
         )
         if response.status_code == 200:
-            return response.json().get('sessions', [])
+            sessions = response.json().get('sessions', [])
+            print(f"DEBUG: Loaded {len(sessions)} sessions")  # デバッグ出力
+            return sessions
+        else:
+            print(f"DEBUG: Failed to load sessions, status: {response.status_code}")
         return []
     except requests.exceptions.Timeout:
         st.error("セッション一覧の取得がタイムアウトしました。")
         return []
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG: Session load error: {str(e)}")
         return []
 
 def delete_chat_session(session_id, token):
@@ -137,12 +146,20 @@ def get_current_session_title(current_session_id, chat_sessions):
     
     for session in chat_sessions:
         if session.get('session_id') == current_session_id:
-            return session.get('title', '無題のチャット')
+            title = session.get('title', '無題のチャット')
+            print(f"DEBUG: Found session title: {title}")  # デバッグ出力
+            return title
     
+    print(f"DEBUG: Session {current_session_id} not found in loaded sessions")
     return "無題のチャット"
 
 def get_file_access_url(source_uri, document_name):
-    """ファイルアクセスURLを取得（キャッシュ機能付き）"""
+    """ファイルアクセスURLを取得（エラー処理強化版）"""
+    # FILE_ACCESS_API が設定されていない場合は None を返す
+    if not FILE_ACCESS_API:
+        print("DEBUG: FILE_ACCESS_API not configured")
+        return None
+    
     # キャッシュキーを生成
     cache_key = f"file_url_{hash(source_uri)}_{hash(document_name)}"
     
@@ -155,9 +172,11 @@ def get_file_access_url(source_uri, document_name):
         cached_data = st.session_state.file_url_cache[cache_key]
         # キャッシュが5分以内の場合は使用
         if time.time() - cached_data['timestamp'] < 300:  # 5分
+            print(f"DEBUG: Using cached file URL for {document_name}")
             return cached_data['url']
     
     try:
+        print(f"DEBUG: Requesting file URL for {document_name} from {FILE_ACCESS_API}")
         response = requests.post(
             f"{FILE_ACCESS_API}/get-file-url",
             headers={
@@ -179,9 +198,13 @@ def get_file_access_url(source_uri, document_name):
                 'url': file_url,
                 'timestamp': time.time()
             }
+            print(f"DEBUG: Successfully got file URL for {document_name}")
             return file_url
+        else:
+            print(f"DEBUG: File URL request failed with status {response.status_code}")
         return None
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG: File URL request error: {str(e)}")
         return None
 
 def show_auth_interface():
@@ -319,9 +342,18 @@ def login_user(email, password):
             
             if response.status_code == 200:
                 data = response.json()
+                # セッション状態を明示的にクリア・再初期化
+                st.session_state.clear()
                 st.session_state.authenticated = True
                 st.session_state.auth_token = data["token"]
                 st.session_state.user_id = email
+                st.session_state.messages = []
+                st.session_state.chat_sessions = []
+                st.session_state.current_session_id = None
+                st.session_state.filters = {}
+                st.session_state.file_url_cache = {}
+                
+                print(f"DEBUG: Login successful for {email}")
                 st.success("✅ ログインしました！")
                 st.balloons()
                 st.rerun()
@@ -364,10 +396,18 @@ def signup_user(email, password):
                     st.info("🔄 自動ログイン中...")
                     time.sleep(1)  # ユーザーフィードバック用の短い遅延
                     
-                    # JWT認証状態を設定
+                    # セッション状態を明示的にクリア・再初期化
+                    st.session_state.clear()
                     st.session_state.authenticated = True
                     st.session_state.auth_token = data["token"]
                     st.session_state.user_id = email
+                    st.session_state.messages = []
+                    st.session_state.chat_sessions = []
+                    st.session_state.current_session_id = None
+                    st.session_state.filters = {}
+                    st.session_state.file_url_cache = {}
+                    
+                    print(f"DEBUG: Signup and auto-login successful for {email}")
                     st.success("🎉 サインアップ完了！チャット画面に移動します...")
                     time.sleep(1)
                     st.rerun()
@@ -402,19 +442,31 @@ def show_chat_interface():
     try:
         # 初回のセッション一覧読み込み
         if not st.session_state.chat_sessions:
+            print("DEBUG: Loading chat sessions for the first time")
             st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
         
         # 現在のセッションタイトルを取得
         current_title = get_current_session_title(st.session_state.current_session_id, st.session_state.chat_sessions)
+        print(f"DEBUG: Current session title: {current_title}")
         
     except Exception as e:
         st.error(f"🚨 show_chat_interface初期化エラー: {str(e)}")
+        print(f"ERROR in show_chat_interface: {str(e)}")
         return
 
-    # サイドバー：セッション管理（改善版・重複排除）
+    # サイドバー：セッション管理
     with st.sidebar:
         st.title("🤖 RAG ChatBot")
         st.write(f"👤 ユーザー: {st.session_state.user_id}")
+        
+        # デバッグ情報（開発時のみ表示）
+        if st.checkbox("🔧 デバッグ情報", key="debug_toggle"):
+            with st.expander("🐛 デバッグ情報"):
+                st.write(f"**Current session ID**: {st.session_state.current_session_id}")
+                st.write(f"**Loaded sessions**: {len(st.session_state.chat_sessions)}")
+                st.write(f"**Messages count**: {len(st.session_state.messages)}")
+                st.write(f"**File cache entries**: {len(st.session_state.get('file_url_cache', {}))}")
+                st.write(f"**FILE_ACCESS_API**: {'✅ 設定済み' if FILE_ACCESS_API else '❌ 未設定'}")
         
         # セキュリティ情報表示
         with st.expander("🔒 セキュリティ情報"):
@@ -424,7 +476,7 @@ def show_chat_interface():
         
         st.divider()
         
-        # 検索フィルター設定（ユニークキー使用）
+        # 検索フィルター設定
         st.subheader("🔍 検索フィルター")
         with st.expander("詳細フィルター"):
             # 製品名フィルター
@@ -484,7 +536,7 @@ def show_chat_interface():
         
         st.divider()
         
-        # チャット履歴（改善版）
+        # チャット履歴
         st.subheader("📚 チャット履歴")
         
         # チャット管理ボタン
@@ -493,15 +545,17 @@ def show_chat_interface():
             if st.button("➕ 新規チャット", use_container_width=True, key="new_chat_btn"):
                 st.session_state.current_session_id = None
                 st.session_state.messages = []
+                print("DEBUG: Started new chat")
                 st.rerun()
         
         with col2:
             if st.button("🔄 履歴更新", use_container_width=True, key="refresh_history_btn"):
                 with st.spinner("セッション一覧を更新中..."):
                     st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+                print("DEBUG: Refreshed chat sessions")
                 st.rerun()
         
-        # 保存済セッション一覧（改善版）
+        # 保存済セッション一覧
         if st.session_state.chat_sessions:
             st.write("**保存済セッション:**")
             for i, session in enumerate(st.session_state.chat_sessions):
@@ -518,7 +572,7 @@ def show_chat_interface():
                         
                         if st.button(
                             display_title,
-                            key=f"session_load_{session['session_id'][:8]}{i}",  # ユニークキー生成
+                            key=f"session_load_{session['session_id'][:8]}{i}",
                             use_container_width=True
                         ):
                             st.session_state.current_session_id = session['session_id']
@@ -534,6 +588,7 @@ def show_chat_interface():
                                 }
                                 sanitized_messages.append(sanitized_msg)
                             st.session_state.messages = sanitized_messages
+                            print(f"DEBUG: Loaded session {session['session_id']} with {len(sanitized_messages)} messages")
                             st.rerun()
                     
                     with col2:
@@ -553,23 +608,17 @@ def show_chat_interface():
         
         # ログアウト
         if st.button("🚪 ログアウト", use_container_width=True, key="logout_btn"):
-            st.session_state.auth_token = None
-            st.session_state.user_id = None
-            st.session_state.current_session_id = None
-            st.session_state.messages = []
-            st.session_state.chat_sessions = []
-            st.session_state.authenticated = False
-            # ファイルURLキャッシュもクリア
-            if 'file_url_cache' in st.session_state:
-                del st.session_state.file_url_cache
+            # セッション状態を明示的にクリア
+            st.session_state.clear()
             st.success("ログアウトしました")
+            print("DEBUG: User logged out")
             st.rerun()
 
-    # メインチャット画面（認証後）
+    # メインチャット画面
     st.title("🤖 RAG ChatBot")
     st.caption("セキュアな知識ベース検索システム")
     
-    # セッションタイトル表示（改善版）
+    # セッションタイトル表示
     if st.session_state.current_session_id:
         st.header(f"💬 {current_title}")
     else:
@@ -581,7 +630,7 @@ def show_chat_interface():
             for k, v in st.session_state.filters.items():
                 st.write(f"**{k}**: {v}")
     
-    # チャット履歴表示（永続化対応・st.rerun()削除版）
+    # チャット履歴表示（永続化対応）
     for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             # メッセージ内容の表示（既にサニタイゼーション済み）
@@ -592,6 +641,8 @@ def show_chat_interface():
                 # ExpanderのデフォルトはFalseに設定（自動展開しない）
                 with st.expander("📚 参照文書", expanded=False):
                     source_docs = message.get("source_documents", [])
+                    print(f"DEBUG: Processing {len(message['citations'])} citations with {len(source_docs)} source docs")
+                    
                     for j, citation in enumerate(message["citations"], 1):
                         col1, col2 = st.columns([4, 1])
                         
@@ -601,8 +652,10 @@ def show_chat_interface():
                             source_uri = doc_info.get('source_uri', '')
                             document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                             
-                            # st.link_buttonを使用（永続化対応）
-                            if source_uri:
+                            print(f"DEBUG: Processing citation {j}: {document_name}, URI: {source_uri}")
+                            
+                            # ファイルアクセス機能の処理
+                            if source_uri and FILE_ACCESS_API:
                                 # ファイルURLを取得（キャッシュ機能付き）
                                 file_url = get_file_access_url(source_uri, document_name)
                                 if file_url:
@@ -617,7 +670,11 @@ def show_chat_interface():
                                 else:
                                     st.write(f"📄 {document_name} (アクセス不可)")
                             else:
-                                st.write(citation)
+                                # ファイルアクセス機能が無効の場合は通常表示
+                                if not FILE_ACCESS_API:
+                                    st.write(f"📄 {document_name} (ファイルアクセス機能未設定)")
+                                else:
+                                    st.write(citation)
                         
                         with col2:
                             # 関連度表示
@@ -643,6 +700,8 @@ def show_chat_interface():
             st.error("質問が長すぎます（最大5000文字）。")
             st.stop()
         
+        print(f"DEBUG: User input: {sanitized_prompt[:50]}...")
+        
         # ユーザーメッセージをセッション状態に追加
         user_message = {
             "role": "user", 
@@ -665,6 +724,8 @@ def show_chat_interface():
                     st.session_state.filters
                 )
                 
+                print(f"DEBUG: RAG API response received: {bool(response_data)}")
+                
                 if response_data and not response_data.get("error"):
                     # 回答表示
                     reply = response_data.get("reply", "回答を取得できませんでした")
@@ -672,15 +733,25 @@ def show_chat_interface():
                     
                     # 新規セッションの場合、セッションIDを更新
                     if response_data.get("is_new_session"):
+                        old_session_id = st.session_state.current_session_id
                         st.session_state.current_session_id = response_data["session_id"]
                         session_title = response_data.get('title', '無題')
+                        
+                        print(f"DEBUG: New session created: {st.session_state.current_session_id}, title: {session_title}")
                         st.success(f"✨ 新しいセッション「{session_title}」を開始しました")
+                        
                         # セッション一覧を更新（バックグラウンドで）
-                        st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+                        try:
+                            st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+                            print("DEBUG: Session list updated after new session creation")
+                        except Exception as e:
+                            print(f"DEBUG: Failed to update session list: {str(e)}")
                     
                     # 引用情報表示（永続化対応）
                     citations = response_data.get("citations", [])
                     source_docs = response_data.get("source_documents", [])
+                    
+                    print(f"DEBUG: Response has {len(citations)} citations and {len(source_docs)} source docs")
                     
                     # アシスタントメッセージをセッション状態に追加
                     assistant_message = {
@@ -703,8 +774,10 @@ def show_chat_interface():
                                     source_uri = doc_info.get('source_uri', '')
                                     document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                                     
-                                    # st.link_buttonを使用（永続化対応）
-                                    if source_uri:
+                                    print(f"DEBUG: New response citation {j}: {document_name}, URI: {source_uri}")
+                                    
+                                    # ファイルアクセス機能の処理
+                                    if source_uri and FILE_ACCESS_API:
                                         # ファイルURLを取得（キャッシュ機能付き）
                                         file_url = get_file_access_url(source_uri, document_name)
                                         if file_url:
@@ -719,7 +792,11 @@ def show_chat_interface():
                                         else:
                                             st.write(f"📄 {document_name} (アクセス不可)")
                                     else:
-                                        st.write(citation)
+                                        # ファイルアクセス機能が無効の場合は通常表示
+                                        if not FILE_ACCESS_API:
+                                            st.write(f"📄 {document_name} (ファイルアクセス機能未設定)")
+                                        else:
+                                            st.write(citation)
                                 
                                 with col2:
                                     # 関連度表示
@@ -735,6 +812,7 @@ def show_chat_interface():
                     # エラー処理
                     error_msg = response_data.get("error", "申し訳ございませんが、現在回答を生成できません。しばらく後に再試行してください。") if response_data else "API接続エラーが発生しました。"
                     st.error(f"❌ エラー: {error_msg}")
+                    print(f"DEBUG: RAG API error: {error_msg}")
                     
                     # エラーメッセージもセッション状態に保存
                     error_message = {
@@ -766,15 +844,19 @@ def main():
     if 'file_url_cache' not in st.session_state:
         st.session_state.file_url_cache = {}
     
+    print(f"DEBUG: Session state initialized, authenticated: {st.session_state.authenticated}")
+    
     # 認証チェック
     if st.session_state.auth_token:
         user_id = verify_jwt_token(st.session_state.auth_token)
         if user_id:
             st.session_state.user_id = user_id
             st.session_state.authenticated = True
+            print(f"DEBUG: Token verified for user: {user_id}")
         else:
             st.session_state.auth_token = None
             st.session_state.authenticated = False
+            print("DEBUG: Token verification failed")
     
     # 認証状態によって画面切り替え
     if st.session_state.authenticated:
@@ -794,6 +876,8 @@ def call_rag_api(query, token, session_id, filters):
         if session_id:
             payload["session_id"] = session_id
         
+        print(f"DEBUG: Calling RAG API with session_id: {session_id}, filters: {filters}")
+        
         # APIリクエスト実行
         response = requests.post(
             f"{RAG_API}/query",
@@ -806,6 +890,8 @@ def call_rag_api(query, token, session_id, filters):
             timeout=180,  # 3分タイムアウト
             verify=True   # SSL証明書検証
         )
+        
+        print(f"DEBUG: RAG API response status: {response.status_code}")
         
         # レスポンス処理
         if response.status_code == 200:
@@ -821,6 +907,7 @@ def call_rag_api(query, token, session_id, filters):
                     sanitized_citations.append(sanitize_input(citation))
                 response_data['citations'] = sanitized_citations
             
+            print(f"DEBUG: RAG API success, new session: {response_data.get('is_new_session', False)}")
             return response_data
         
         elif response.status_code == 401:
@@ -839,6 +926,7 @@ def call_rag_api(query, token, session_id, filters):
     except requests.exceptions.ConnectionError:
         return {"error": "🌐 ネットワーク接続エラーが発生しました。"}
     except Exception as e:
+        print(f"DEBUG: RAG API call exception: {str(e)}")
         return {"error": "❌ 予期しないエラーが発生しました。"}
 
 if __name__ == "__main__":
