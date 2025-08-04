@@ -4,6 +4,7 @@ import json
 import html
 import re
 import os
+import time
 from datetime import datetime
 
 # セキュリティ設定
@@ -333,7 +334,7 @@ def login_user(email, password):
             st.error("❌ 予期しないエラーが発生しました。管理者に連絡してください")
 
 def signup_user(email, password):
-    """サインアップ処理（エラーハンドリング強化 + 自動ログイン）"""
+    """サインアップ処理（JWT自動ログイン対応）"""
     with st.spinner("👤 アカウント作成中..."):
         try:
             response = requests.post(
@@ -343,28 +344,24 @@ def signup_user(email, password):
             )
             
             if response.status_code == 201:
+                data = response.json()
                 st.success("✅ アカウントを作成しました！")
                 st.balloons()
                 
-                # 自動ログイン処理
-                st.info("🔄 自動ログイン中...")
-                time.sleep(1)  # ユーザーフィードバック用の短い遅延
-                
-                # ログイン処理実行
-                login_response = requests.post(
-                    f"{AUTH_API}/login",
-                    json={"user_id": email, "password": password},
-                    timeout=15
-                )
-                
-                if login_response.status_code == 200:
-                    data = login_response.json()
+                # Lambda関数からJWTトークンを受け取って自動ログイン
+                if data.get("token"):
+                    st.info("🔄 自動ログイン中...")
+                    time.sleep(1)  # ユーザーフィードバック用の短い遅延
+                    
+                    # JWT認証状態を設定
                     st.session_state.authenticated = True
                     st.session_state.auth_token = data["token"]
                     st.session_state.user_id = email
                     st.success("🎉 サインアップ完了！チャット画面に移動します...")
+                    time.sleep(1)
                     st.rerun()
                 else:
+                    # フォールバック：従来の手動ログイン案内
                     st.info("📧 アカウント作成完了！ログインタブからログインしてください")
                     
             else:
@@ -387,6 +384,7 @@ def signup_user(email, password):
             st.error("🌐 サーバーに接続できません")
         except Exception as e:
             st.error("❌ 予期しないエラーが発生しました")
+            print(f"Signup error: {str(e)}")  # デバッグ用
 
 def show_chat_interface():
     """チャット画面（認証後のみ表示）"""
