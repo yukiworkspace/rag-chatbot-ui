@@ -786,7 +786,6 @@ def show_chat_interface():
                                                 f"📄 {document_name}",
                                                 file_url,
                                                 help="クリックしてファイルを新しいタブで開く",
-                                                key=button_key
                                             )
                                         else:
                                             st.write(f"📄 {document_name} (アクセス不可)")
