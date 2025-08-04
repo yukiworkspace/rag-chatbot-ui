@@ -142,7 +142,21 @@ def get_current_session_title(current_session_id, chat_sessions):
     return "無題のチャット"
 
 def get_file_access_url(source_uri, document_name):
-    """ファイルアクセスURLを取得"""
+    """ファイルアクセスURLを取得（キャッシュ機能付き）"""
+    # キャッシュキーを生成
+    cache_key = f"file_url_{hash(source_uri)}_{hash(document_name)}"
+    
+    # セッション状態にファイルURLキャッシュがない場合は初期化
+    if 'file_url_cache' not in st.session_state:
+        st.session_state.file_url_cache = {}
+    
+    # キャッシュから取得を試行
+    if cache_key in st.session_state.file_url_cache:
+        cached_data = st.session_state.file_url_cache[cache_key]
+        # キャッシュが5分以内の場合は使用
+        if time.time() - cached_data['timestamp'] < 300:  # 5分
+            return cached_data['url']
+    
     try:
         response = requests.post(
             f"{FILE_ACCESS_API}/get-file-url",
@@ -159,7 +173,13 @@ def get_file_access_url(source_uri, document_name):
         )
         
         if response.status_code == 200:
-            return response.json().get('file_url')
+            file_url = response.json().get('file_url')
+            # キャッシュに保存
+            st.session_state.file_url_cache[cache_key] = {
+                'url': file_url,
+                'timestamp': time.time()
+            }
+            return file_url
         return None
     except Exception:
         return None
@@ -539,6 +559,9 @@ def show_chat_interface():
             st.session_state.messages = []
             st.session_state.chat_sessions = []
             st.session_state.authenticated = False
+            # ファイルURLキャッシュもクリア
+            if 'file_url_cache' in st.session_state:
+                del st.session_state.file_url_cache
             st.success("ログアウトしました")
             st.rerun()
 
@@ -558,18 +581,16 @@ def show_chat_interface():
             for k, v in st.session_state.filters.items():
                 st.write(f"**{k}**: {v}")
     
-    # チャット履歴表示（永続化対応）
+    # チャット履歴表示（永続化対応・st.rerun()削除版）
     for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
-            # メッセージ内容の表示（既にサニタイズ済み）
+            # メッセージ内容の表示（既にサニタイゼーション済み）
             st.markdown(message["content"])
             
             # 引用情報の表示（永続化対応・st.link_button版）
             if message["role"] == "assistant" and message.get("citations"):
-                # ユニークなキーを使用して状態を永続化
-                expander_key = f"citations_{i}_{st.session_state.current_session_id}"
-                
-                with st.expander("📚 参照文書", expanded=False, key=expander_key):
+                # ExpanderのデフォルトはFalseに設定（自動展開しない）
+                with st.expander("📚 参照文書", expanded=False):
                     source_docs = message.get("source_documents", [])
                     for j, citation in enumerate(message["citations"], 1):
                         col1, col2 = st.columns([4, 1])
@@ -580,15 +601,18 @@ def show_chat_interface():
                             source_uri = doc_info.get('source_uri', '')
                             document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                             
-                            # st.link_buttonを使用（推奨）
+                            # st.link_buttonを使用（永続化対応）
                             if source_uri:
-                                # まずファイルURLを取得
+                                # ファイルURLを取得（キャッシュ機能付き）
                                 file_url = get_file_access_url(source_uri, document_name)
                                 if file_url:
+                                    # ユニークキーを設定して永続化
+                                    button_key = f"file_link_{i}_{j}_{hash(source_uri)}"
                                     st.link_button(
                                         f"📄 {document_name}",
                                         file_url,
-                                        help="クリックしてファイルを新しいタブで開く"
+                                        help="クリックしてファイルを新しいタブで開く",
+                                        key=button_key
                                     )
                                 else:
                                     st.write(f"📄 {document_name} (アクセス不可)")
@@ -605,7 +629,7 @@ def show_chat_interface():
             if message.get("timestamp"):
                 st.caption(f"🕒 {message['timestamp'][:19].replace('T', ' ')}")
     
-    # ユーザー入力（ユニークキー追加）
+    # ユーザー入力（永続化対応）
     if prompt := st.chat_input("質問を入力してください（最大5000文字）", key="main_chat_input"):
         # 入力値のサニタイゼーション
         sanitized_prompt = sanitize_input(prompt)
@@ -619,11 +643,19 @@ def show_chat_interface():
             st.error("質問が長すぎます（最大5000文字）。")
             st.stop()
         
+        # ユーザーメッセージをセッション状態に追加
+        user_message = {
+            "role": "user", 
+            "content": sanitized_prompt,
+            "timestamp": datetime.now().isoformat()
+        }
+        st.session_state.messages.append(user_message)
+        
         # ユーザーメッセージ表示
         with st.chat_message("user"):
             st.markdown(sanitized_prompt)
         
-        # RAG APIコール
+        # RAG APIコール（st.rerun()を使わない版）
         with st.chat_message("assistant"):
             with st.spinner("🤖 AI回答を生成中..."):
                 response_data = call_rag_api(
@@ -633,9 +665,7 @@ def show_chat_interface():
                     st.session_state.filters
                 )
                 
-                if response_data.get("error"):
-                    st.error(f"❌ エラー: {response_data['error']}")
-                else:
+                if response_data and not response_data.get("error"):
                     # 回答表示
                     reply = response_data.get("reply", "回答を取得できませんでした")
                     st.markdown(reply)
@@ -645,13 +675,25 @@ def show_chat_interface():
                         st.session_state.current_session_id = response_data["session_id"]
                         session_title = response_data.get('title', '無題')
                         st.success(f"✨ 新しいセッション「{session_title}」を開始しました")
+                        # セッション一覧を更新（バックグラウンドで）
+                        st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
                     
-                    # 引用情報表示
+                    # 引用情報表示（永続化対応）
                     citations = response_data.get("citations", [])
                     source_docs = response_data.get("source_documents", [])
                     
+                    # アシスタントメッセージをセッション状態に追加
+                    assistant_message = {
+                        "role": "assistant", 
+                        "content": reply,
+                        "timestamp": datetime.now().isoformat(),
+                        "citations": citations,
+                        "source_documents": source_docs
+                    }
+                    st.session_state.messages.append(assistant_message)
+                    
                     if citations:
-                        with st.expander("📚 参照文書"):
+                        with st.expander("📚 参照文書", expanded=True):  # 新しい回答では展開状態で表示
                             for j, citation in enumerate(citations, 1):
                                 col1, col2 = st.columns([4, 1])
                                 
@@ -661,15 +703,18 @@ def show_chat_interface():
                                     source_uri = doc_info.get('source_uri', '')
                                     document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
                                     
-                                    # st.link_buttonを使用（推奨）
+                                    # st.link_buttonを使用（永続化対応）
                                     if source_uri:
-                                        # まずファイルURLを取得
+                                        # ファイルURLを取得（キャッシュ機能付き）
                                         file_url = get_file_access_url(source_uri, document_name)
                                         if file_url:
+                                            # 新しい回答の場合は特別なキーを使用
+                                            button_key = f"new_file_link_{j}_{int(time.time())}"
                                             st.link_button(
                                                 f"📄 {document_name}",
                                                 file_url,
-                                                help="クリックしてファイルを新しいタブで開く"
+                                                help="クリックしてファイルを新しいタブで開く",
+                                                key=button_key
                                             )
                                         else:
                                             st.write(f"📄 {document_name} (アクセス不可)")
@@ -681,12 +726,23 @@ def show_chat_interface():
                                     score = doc_info.get('score', 0) if j-1 < len(source_docs) else 0
                                     if score > 0:
                                         st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
-        
-        # セッション一覧を更新（新規セッション作成時）
-        if response_data.get("is_new_session"):
-            st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
-        
-        st.rerun()
+                        
+                        st.success("✅ 回答を生成しました（参照文書付き）")
+                    else:
+                        st.success("✅ 回答を生成しました")
+                    
+                else:
+                    # エラー処理
+                    error_msg = response_data.get("error", "申し訳ございませんが、現在回答を生成できません。しばらく後に再試行してください。") if response_data else "API接続エラーが発生しました。"
+                    st.error(f"❌ エラー: {error_msg}")
+                    
+                    # エラーメッセージもセッション状態に保存
+                    error_message = {
+                        "role": "assistant", 
+                        "content": error_msg,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    st.session_state.messages.append(error_message)
 
 def main():
     # セッション状態の初期化
@@ -707,6 +763,8 @@ def main():
         st.session_state.user_id = None
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
+    if 'file_url_cache' not in st.session_state:
+        st.session_state.file_url_cache = {}
     
     # 認証チェック
     if st.session_state.auth_token:
