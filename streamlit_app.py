@@ -210,7 +210,7 @@ def get_file_access_url(source_uri, document_name):
 def show_auth_interface():
     """認証画面（未ログイン時のみ表示）"""
     # メインコンテンツ（認証画面）
-    st.title("🤖 RAG ChatBot")
+    st.title("RAG ChatBot")
     st.caption("セキュアな知識ベース検索システム")
     
     st.header("🔐 ログイン・サインアップ")
@@ -456,8 +456,8 @@ def show_chat_interface():
 
     # サイドバー：セッション管理
     with st.sidebar:
-        st.title("🤖 RAG ChatBot")
-        st.write(f"👤 ユーザー: {st.session_state.user_id}")
+        st.title("RAG ChatBot")
+        st.write(f"🧑‍💻 ユーザー: {st.session_state.user_id}")
         
         # デバッグ情報（開発時のみ表示）
         if st.checkbox("🔧 デバッグ情報", key="debug_toggle"):
@@ -615,7 +615,7 @@ def show_chat_interface():
             st.rerun()
 
     # メインチャット画面
-    st.title("🤖 RAG ChatBot")
+    st.title("RAG ChatBot")
     st.caption("セキュアな知識ベース検索システム")
     
     # セッションタイトル表示
@@ -632,8 +632,8 @@ def show_chat_interface():
     
     # チャット履歴表示（永続化対応）
     for i, message in enumerate(st.session_state.messages):
-        with st.chat_message(message["role"]):
-            # メッセージ内容の表示（既にサニタイゼーション済み）
+        avatar_icon = "🧑‍💻" if message["role"] == "user" else "🤖"
+        with st.chat_message(message["role"], avatar=avatar_icon):
             st.markdown(message["content"])
             
             # 引用情報の表示（永続化対応・st.link_button版）
@@ -710,14 +710,14 @@ def show_chat_interface():
         st.session_state.messages.append(user_message)
         
         # ユーザーメッセージ表示
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar="🧑‍💻"):
             st.markdown(sanitized_prompt)
         
         # RAG APIコール（st.rerun()を使わない版）
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar="🤖"):
             with st.spinner("🤖 AI回答を生成中..."):
                 response_data = call_rag_api(
-                    sanitized_prompt, 
+                    sanitized_prompt,
                     st.session_state.auth_token,
                     st.session_state.current_session_id,
                     st.session_state.filters
