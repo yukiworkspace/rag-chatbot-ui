@@ -702,7 +702,38 @@ def show_chat_interface():
         if response_data.get("is_new_session"):
             st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
         
-        st.rerun() = st.columns([4, 1])
+                                with col1:
+                                    # 対応する文書の情報を取得
+                                    doc_info = source_docs[j-1] if j-1 < len(source_docs) else {}
+                                    source_uri = doc_info.get('source_uri', '')
+                                    document_name = doc_info.get('document_name', citation.replace('📄 ', ''))
+                                    
+                                    # st.link_buttonを使用（推奨）
+                                    if source_uri:
+                                        # まずファイルURLを取得
+                                        file_url = get_file_access_url(source_uri, document_name)
+                                        if file_url:
+                                            st.link_button(
+                                                f"📄 {document_name}",
+                                                file_url,
+                                                help="クリックしてファイルを新しいタブで開く"
+                                            )
+                                        else:
+                                            st.write(f"📄 {document_name} (アクセス不可)")
+                                    else:
+                                        st.write(citation)
+                                
+                                with col2:
+                                    # 関連度表示
+                                    score = doc_info.get('score', 0) if j-1 < len(source_docs) else 0
+                                    if score > 0:
+                                        st.metric("関連度", f"{score:.3f}", help="検索クエリとの関連度スコア")
+        
+        # セッション一覧を更新（新規セッション作成時）
+        if response_data.get("is_new_session"):
+            st.session_state.chat_sessions = load_chat_sessions(st.session_state.auth_token)
+        
+        st.rerun()
                                 
                                 with col1:
                                     # 対応する文書の情報を取得
